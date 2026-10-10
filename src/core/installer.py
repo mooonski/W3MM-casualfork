@@ -28,6 +28,9 @@ class Installer:
 
     progress: Callable[[float], Any] = lambda _: None
     output: Callable[[str], Any] = lambda _: None
+    # Called with the fetched mod and its extracted folder before anything is copied. Returning a result
+    # (success, installed, incomplete) ends the install there, e.g. because the mod was installed as an update.
+    duplicate: Callable[[Mod, str], Tuple[bool, int, int] | None] | None = None
 
     def installMod(self, modPath: str, name: str | None = None) -> Tuple[bool, int, int]:
         '''Installs mod from given path. If given mod is an archive first extracts it.
@@ -71,6 +74,10 @@ class Installer:
                 raise ValueError('Mod name must not be empty')
             if nexusArchive:
                 mod.nexus = NexusInfo(modId=nexusArchive[1], version=nexusArchive[2], archive=path.basename(modPath))
+            if self.duplicate is not None:
+                handled = self.duplicate(mod, extraction.name if isArchive(modPath) else modPath)
+                if handled is not None:
+                    return handled
 
             if not data.getConfig().mods:
                 raise Exception(translate("MainWindow", "Mods folder does not exist and could not be created."))

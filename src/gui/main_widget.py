@@ -1,6 +1,8 @@
 '''Main Widget'''
 
+import os
 import shlex
+import shutil
 from collections.abc import Callable
 from os import path
 from sys import platform
@@ -15,7 +17,7 @@ from PySide6.QtCore import (
     QThread,
     Signal,
 )
-from PySide6.QtGui import QAction, QActionGroup, QCursor, QResizeEvent
+from PySide6.QtGui import QAction, QActionGroup, QBrush, QColor, QCursor, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -42,6 +44,8 @@ from PySide6.QtWidgets import (
 from watchdog.events import DirModifiedEvent, FileModifiedEvent, PatternMatchingEventHandler
 from watchdog.observers import Observer
 
+from src.core.duplicates import duplicateEntries, matchingEntries, versionNote
+from src.core.fetcher import isArchive
 from src.core.installer import Installer
 from src.core.model import Model
 from src.core.nexus import (
@@ -56,9 +60,11 @@ from src.core.nexus import (
     UpdateCheck,
     checkForUpdate,
     parseModReference,
+    uniquePath,
 )
 from src.core.rmmr import RmmrError, applyImport, isRmmrFolder, planImport
 from src.core.updater import ModUpdater
+from src.domain.mod import Mod
 from src.globals import data
 from src.globals.constants import *
 from src.gui.alerts import (
@@ -149,6 +155,7 @@ class CustomMainWidget(QWidget):
         self.checkLanguage()
         self.checkTheme()
         self.refreshList()
+        self.reportDuplicates()
 
         QMetaObject.connectSlotsByName(self.mainWindow)
 
@@ -158,6 +165,7 @@ class CustomMainWidget(QWidget):
 
         self.actionAlert_to_run_Script_Merger.setChecked(data.getConfig().allowpopups == "1")
         self.actionUseNativeFileDialogs.setChecked(data.getConfig().get("SETTINGS", "usenativedialog", "1") == "1")
+        self.actionKeepArchives.setChecked(data.getConfig().keeparchives == "1")
 
     @debounceGui(200)
     def onResize(self):
@@ -377,6 +385,7 @@ class CustomMainWidget(QWidget):
         self.actionOpenNexusPage.triggered.connect(self.openNexusPage)
         self.actionRestoreBackup.triggered.connect(self.restoreBackup)
         self.actionImportRmmr.triggered.connect(self.importFromRmmr)
+        self.actionKeepArchives.triggered.connect(self.keepArchivesChanged)
         self.actionSetApiKey.triggered.connect(lambda: askApiKey(self))
         self.actionChangeArchiveFolder.triggered.connect(self.changeArchiveFolder)
         self.actionChangeBackupFolder.triggered.connect(self.changeBackupFolder)
@@ -847,7 +856,7 @@ class CustomMainWidget(QWidget):
             if file:
                 progress = 0
                 progressMax = len(file)
-                installer = Installer(self.model, output=self.output)
+                installer = Installer(self.model, output=self.output, duplicate=self.handleDuplicate)
                 for mod in file:
                     progressStart = 100 * progress / progressMax
                     progressEnd = 100 * (progress + 1) / progressMax
@@ -856,6 +865,8 @@ class CustomMainWidget(QWidget):
                     result, count, incomplete = installer.installMod(mod)
                     if result:
                         successCount += count
+                        if count:
+                            self.keepArchive(mod)
                     else:
                         errorCount += 1
                     if incomplete:
@@ -865,6 +876,7 @@ class CustomMainWidget(QWidget):
                 lastpath, _ = path.split(file[0])
                 data.getConfig().lastpath = lastpath
                 self.refreshList()
+                self.reportDuplicates()
                 if incompleteCount:
                     MessageAlertIncompleteInstallation()
                 if successCount:
@@ -1307,6 +1319,98 @@ class CustomMainWidget(QWidget):
         else:
             self.output("> " + translate("MainWindow", "Could not restore") + f" {name}")
 
+    def handleDuplicate(self, mod: Mod, source: str) -> tuple[bool, int, int] | None:
+        '''Asks what to do when a mod being installed looks like one that's already installed.
+        Returns the install result when it's handled here, or None to install it as usual.'''
+        matches = matchingEntries(self.model, mod)
+        if not matches:
+            return None
+        first = matches[0]
+        version = versionNote(mod, first.mod)
+        text = (
+            f"'{mod.name}' "
+            + translate("MainWindow", "looks like a mod that's already installed:")
+            + "\n\n"
+            + "\n".join(f"  {match.mod.name} {translate('MainWindow', match.reason)}" for match in matches)
+            + "\n\n"
+            + (version + "\n\n" if version else "")
+            + translate("MainWindow", "Update replaces")
+            + f" '{first.mod.name}' "
+            + translate(
+                "MainWindow",
+                "with this version, keeping its name, priority, enabled state and settings, after backing it up.",
+            )
+        )
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(translate("MainWindow", "Already installed?"))
+        box.setText(text)
+        update = box.addButton(
+            translate("MainWindow", "Update") + f" '{first.mod.name}'", QMessageBox.ButtonRole.AcceptRole
+        )
+        separate = box.addButton(translate("MainWindow", "Install separately"), QMessageBox.ButtonRole.ActionRole)
+        box.addButton(translate("MainWindow", "Skip"), QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(update)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked == separate:
+            if mod.name in self.model.modList:
+                # installing under the same name would replace that entry and leave its files untracked
+                self.output(
+                    translate("MainWindow", "An entry named")
+                    + f" '{mod.name}' "
+                    + translate("MainWindow", "already exists, so this one is installed as")
+                    + f" '{self.uniqueName(mod.name)}'"
+                )
+                mod._name = self.uniqueName(mod.name)
+            return None
+        if clicked != update:
+            self.output(translate("MainWindow", "Skipped") + f" {mod.name}")
+            return True, 0, 0
+        existing = first.mod
+        nexus = mod.nexus
+        if nexus is None and existing.nexus:
+            # a new version from an archive that doesn't say which Nexus file it is
+            nexus = NexusInfo(existing.nexus.modId, game=existing.nexus.game)
+        result = ModUpdater(self.model, output=self.output).update(existing, source, nexus, "install")
+        self.updateChecks.pop(existing.name, None)
+        return result.success, int(result.success), int(result.incomplete)
+
+    def uniqueName(self, name: str) -> str:
+        number = 2
+        candidate = f"{name} ({number})"
+        while candidate in self.model.modList:
+            number += 1
+            candidate = f"{name} ({number})"
+        return candidate
+
+    def reportDuplicates(self) -> None:
+        '''Lists entries that clash with each other'''
+        for name, reasons in sorted(duplicateEntries(self.model).items(), key=lambda item: item[0].lower()):
+            for reason in reasons:
+                self.output(translate("MainWindow", "Installed twice?") + f" {name} {reason}")
+
+    def keepArchive(self, archive: str) -> None:
+        '''Copies an installed archive into the download folder, so its original file is kept'''
+        if data.getConfig().keeparchives != "1" or not isArchive(archive) or not path.isfile(archive):
+            return
+        folder = data.getConfig().archives
+        try:
+            if path.normcase(path.realpath(path.dirname(archive))) == path.normcase(path.realpath(folder)):
+                return
+            target = path.join(folder, path.basename(archive))
+            if path.isfile(target) and path.getsize(target) == path.getsize(archive):
+                return
+            os.makedirs(folder, exist_ok=True)
+            target = uniquePath(folder, path.basename(archive))
+            shutil.copy2(archive, target)
+            self.output(translate("MainWindow", "Kept a copy of the archive in") + f" {target}")
+        except OSError as error:
+            self.output(translate("MainWindow", "Could not keep a copy of the archive:") + f" {error}")
+
+    def keepArchivesChanged(self) -> None:
+        data.getConfig().keeparchives = "1" if self.actionKeepArchives.isChecked() else "0"
+
     def importFromRmmr(self) -> None:
         '''Adds mods and Nexus IDs from Relapse's Mod Manager Redux, after showing what will change'''
         folder = QFileDialog.getExistingDirectory(
@@ -1331,6 +1435,7 @@ class CustomMainWidget(QWidget):
             return
         added, linked = applyImport(plan, self.model)
         self.refreshList()
+        self.reportDuplicates()
         self.output(
             "> "
             + translate("MainWindow", "Imported from RMMR:")
@@ -1368,6 +1473,7 @@ class CustomMainWidget(QWidget):
         try:
             selected = self.getSelectedMods()
             self.treeWidget.clear()
+            duplicates = duplicateEntries(self.model)
             moddata = []
             for mod in self.model.all():
                 if len(self.searchString) > 0:
@@ -1390,7 +1496,7 @@ class CustomMainWidget(QWidget):
                 userstr = translate("MainWindow", "No")
                 if mod.usersettings:
                     userstr = translate("MainWindow", "Yes")
-                self.addToList(
+                row = self.addToList(
                     mod.enabled,
                     mod.name,
                     mod.priority,
@@ -1406,6 +1512,14 @@ class CustomMainWidget(QWidget):
                     mod.nexus.version if mod.nexus else "",
                     statusText(self.updateChecks.get(mod.name)),
                 )
+                if mod.name in duplicates:
+                    row.setForeground(1, QBrush(QColor("#e5a050")))
+                    row.setToolTip(
+                        1,
+                        translate("MainWindow", "Installed twice?")
+                        + "\n"
+                        + "\n".join(f"{mod.name} {reason}" for reason in duplicates[mod.name]),
+                    )
             for item in selected:
                 rows = self.treeWidget.findItems(item, Qt.MatchFlag.MatchEndsWith, 1)
                 if rows:
@@ -1727,6 +1841,10 @@ class CustomMainWidget(QWidget):
         self.actionImportRmmr = QAction(self.mainWindow)
         self.actionImportRmmr.setObjectName("actionImportRmmr")
 
+        self.actionKeepArchives = QAction(self.mainWindow)
+        self.actionKeepArchives.setCheckable(True)
+        self.actionKeepArchives.setObjectName("actionKeepArchives")
+
         self.actionSetApiKey = QAction(self.mainWindow)
         self.actionSetApiKey.setObjectName("actionSetApiKey")
 
@@ -1845,6 +1963,7 @@ class CustomMainWidget(QWidget):
         self.menuNexus.addSeparator()
         self.menuNexus.addAction(self.actionSetApiKey)
         self.menuNexus.addAction(self.actionChangeArchiveFolder)
+        self.menuNexus.addAction(self.actionKeepArchives)
         self.menuNexus.addAction(self.actionChangeBackupFolder)
 
         # --- Build Help menu ---
@@ -1967,4 +2086,8 @@ class CustomMainWidget(QWidget):
         )
         self.actionSetApiKey.setText(translate("MainWindow", "Set API Key..."))
         self.actionChangeArchiveFolder.setText(translate("MainWindow", "Change Download Folder..."))
+        self.actionKeepArchives.setText(translate("MainWindow", "Keep Copies of Installed Archives"))
+        self.actionKeepArchives.setToolTip(
+            translate("MainWindow", "Copy archives installed from other folders into the download folder")
+        )
         self.actionChangeBackupFolder.setText(translate("MainWindow", "Change Backup Folder..."))

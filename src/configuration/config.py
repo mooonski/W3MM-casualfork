@@ -246,6 +246,15 @@ class Configuration:
         self.set('PATHS', 'backups', value)
 
     @property
+    def keeparchives(self) -> str:
+        '''"1" to copy archives installed from elsewhere into the download folder'''
+        return self.get('SETTINGS', 'keeparchives', '1')
+
+    @keeparchives.setter
+    def keeparchives(self, value: str):
+        self.set('SETTINGS', 'keeparchives', value)
+
+    @property
     def rmmr(self) -> str:
         '''Folder of Relapse's Mod Manager Redux, remembered for importing'''
         return self.get('PATHS', 'rmmr', '')
