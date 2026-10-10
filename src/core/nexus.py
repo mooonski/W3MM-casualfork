@@ -176,13 +176,26 @@ class UpdateCheck:
 
 
 NEW_ARCHIVE_PATTERN = re.compile(
-    r"^(?P<name>.+?) (?P<modid>\d+) (?P<version>\S+) \d{4}-\d{2}-\d{2}T\d{2}-\d{2}Z [A-Za-z0-9]+\.(?:zip|7z|rar)$",
+    r"^(?P<name>.+?) (?P<modid>\d+) (?P<version>\S+) (?P<stamp>\d{4}-\d{2}-\d{2}T\d{2}-\d{2}Z) [A-Za-z0-9]+"
+    r"\.(?:zip|7z|rar)$",
     re.IGNORECASE,
 )
 LEGACY_ARCHIVE_PATTERN = re.compile(
-    r"^(?P<name>.+?)-(?P<modid>\d+)-(?P<version>[0-9a-z\-]*?)-?\d{9,11}\.(?:zip|7z|rar)$",
+    r"^(?P<name>.+?)-(?P<modid>\d+)-(?P<version>[0-9a-z\-]*?)-?(?P<stamp>\d{9,11})\.(?:zip|7z|rar)$",
     re.IGNORECASE,
 )
+
+
+def archiveUploadTime(filename: str) -> int:
+    '''Returns the upload time (unix, UTC) that Nexus puts in its download names, or 0'''
+    base = os.path.basename(filename)
+    match = NEW_ARCHIVE_PATTERN.match(base)
+    if match:
+        return calendar.timegm(time.strptime(match.group('stamp'), "%Y-%m-%dT%H-%MZ"))
+    match = LEGACY_ARCHIVE_PATTERN.match(base)
+    if match:
+        return int(match.group('stamp'))
+    return 0
 
 
 def parseArchiveName(filename: str) -> tuple[str, int, str] | None:

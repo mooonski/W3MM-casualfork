@@ -495,6 +495,9 @@ class ConfigurationNexusSettingsTests(unittest.TestCase):
             config.archives = "D:/mods"
             config.backups = "D:/backups"
             self.assertEqual((config.archives, config.backups), ("D:/mods", "D:/backups"))
+            self.assertEqual(config.rmmr, "")
+            config.rmmr = "D:/mods/Witcher 3 Mod Manager"
+            self.assertEqual(config.rmmr, "D:/mods/Witcher 3 Mod Manager")
 
             self.assertEqual(config.nexusapikey, "")
             config.nexusapikey = "  secret-key  "

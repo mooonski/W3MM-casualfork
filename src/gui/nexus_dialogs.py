@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.core.nexus import FAILED, UP_TO_DATE, UPDATE_AVAILABLE, NexusClient, NexusError, NexusFile, UpdateCheck
+from src.core.rmmr import ADD, LINK, SKIP, ImportPlan
 from src.core.updater import Backup
 from src.globals import data
 from src.globals.constants import translate
@@ -268,3 +269,73 @@ class BackupsDialog(QDialog):
     def selected(self) -> Backup | None:
         item = self.list.currentItem()
         return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+
+class RmmrImportDialog(QDialog):
+    '''Shows what an RMMR import will do and asks for confirmation'''
+
+    ACTIONS = {ADD: ("Add", 0), LINK: ("Link Nexus ID", 1), SKIP: ("Skip", 2)}
+
+    def __init__(self, parent: QWidget | None, plan: ImportPlan):
+        super().__init__(parent)
+        self.setWindowTitle(translate("Nexus", "Import from RMMR"))
+        self.resize(1100, 600)
+        layout = QVBoxLayout(self)
+
+        for warning in plan.warnings:
+            label = QLabel(warning)
+            label.setWordWrap(True)
+            label.setStyleSheet("color: #d08770; font-weight: bold;")
+            layout.addWidget(label)
+        summary = QLabel(
+            translate("Nexus", "RMMR's files are only read, never changed.")
+            + "\n"
+            + f"{plan.count(ADD)} "
+            + translate("Nexus", "mods will be added")
+            + f", {plan.count(LINK)} "
+            + translate("Nexus", "will get their Nexus ID")
+            + f", {plan.count(SKIP)} "
+            + translate("Nexus", "skipped")
+            + "."
+        )
+        summary.setWordWrap(True)
+        layout.addWidget(summary)
+
+        self.tree = QTreeWidget(self)
+        self.tree.setColumnCount(4)
+        self.tree.setHeaderLabels(
+            [
+                translate("Nexus", "Mod"),
+                translate("Nexus", "Action"),
+                translate("Nexus", "Nexus"),
+                translate("Nexus", "Details"),
+            ]
+        )
+        self.tree.setRootIsDecorated(False)
+        self.tree.setWordWrap(True)
+        self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.tree.header().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.tree.header().resizeSection(0, 320)
+        layout.addWidget(self.tree)
+
+        for item in sorted(plan.items, key=lambda i: (self.ACTIONS[i.action][1], i.name.lower())):
+            nexus = ''
+            if item.nexus:
+                nexus = str(item.nexus.modId)
+                if item.nexus.version:
+                    nexus += f"  v{item.nexus.version.lstrip('vV')}"
+            details = "; ".join([item.reason] + item.notes)
+            row = QTreeWidgetItem([item.name, translate("Nexus", self.ACTIONS[item.action][0]), nexus, details])
+            row.setToolTip(3, "\n".join([item.reason] + item.notes))
+            if item.nexus and item.nexus.archive:
+                row.setToolTip(2, translate("Nexus", "Installed file:") + f" {item.nexus.archive}")
+            self.tree.addTopLevelItem(row)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel, self)
+        self.importButton = buttons.addButton(translate("Nexus", "Import"), QDialogButtonBox.ButtonRole.AcceptRole)
+        self.importButton.setEnabled(bool(plan.count(ADD) or plan.count(LINK)))
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)

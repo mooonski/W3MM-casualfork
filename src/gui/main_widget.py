@@ -57,6 +57,7 @@ from src.core.nexus import (
     checkForUpdate,
     parseModReference,
 )
+from src.core.rmmr import RmmrError, applyImport, isRmmrFolder, planImport
 from src.core.updater import ModUpdater
 from src.globals import data
 from src.globals.constants import *
@@ -66,7 +67,15 @@ from src.gui.alerts import (
     MessageUnsupportedOSAction,
 )
 from src.gui.details_dialog import DetailsDialog
-from src.gui.nexus_dialogs import BackupsDialog, NexusWorker, UpdateRow, UpdatesDialog, askApiKey, statusText
+from src.gui.nexus_dialogs import (
+    BackupsDialog,
+    NexusWorker,
+    RmmrImportDialog,
+    UpdateRow,
+    UpdatesDialog,
+    askApiKey,
+    statusText,
+)
 from src.gui.themes import get_dark_palette, get_light_palette, get_system_palette
 from src.gui.tree_widget import CustomTreeWidgetItem
 from src.util.syntax import *
@@ -367,6 +376,7 @@ class CustomMainWidget(QWidget):
         self.actionSetNexusMod.triggered.connect(self.setNexusMod)
         self.actionOpenNexusPage.triggered.connect(self.openNexusPage)
         self.actionRestoreBackup.triggered.connect(self.restoreBackup)
+        self.actionImportRmmr.triggered.connect(self.importFromRmmr)
         self.actionSetApiKey.triggered.connect(lambda: askApiKey(self))
         self.actionChangeArchiveFolder.triggered.connect(self.changeArchiveFolder)
         self.actionChangeBackupFolder.triggered.connect(self.changeBackupFolder)
@@ -1297,6 +1307,39 @@ class CustomMainWidget(QWidget):
         else:
             self.output("> " + translate("MainWindow", "Could not restore") + f" {name}")
 
+    def importFromRmmr(self) -> None:
+        '''Adds mods and Nexus IDs from Relapse's Mod Manager Redux, after showing what will change'''
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            translate("MainWindow", "Select the Relapse's Mod Manager Redux folder"),
+            data.getConfig().rmmr,
+        )
+        if not folder:
+            return
+        folder = normalizePath(folder)
+        if not isRmmrFolder(folder):
+            self.output(translate("MainWindow", "No RMMR installed.xml and mod_metadata.json in") + f" {folder}")
+            return
+        data.getConfig().rmmr = folder
+        try:
+            plan = planImport(folder, self.model, [data.getConfig().archives])
+        except RmmrError as error:
+            self.output(str(error))
+            return
+        dialog = RmmrImportDialog(self, plan)
+        if not dialog.exec():
+            return
+        added, linked = applyImport(plan, self.model)
+        self.refreshList()
+        self.output(
+            "> "
+            + translate("MainWindow", "Imported from RMMR:")
+            + f" {added} "
+            + translate("MainWindow", "added")
+            + f", {linked} "
+            + translate("MainWindow", "linked to Nexus")
+        )
+
     def changeArchiveFolder(self) -> None:
         folder = QFileDialog.getExistingDirectory(
             self, translate("MainWindow", "Folder for downloaded mod archives"), data.getConfig().archives
@@ -1681,6 +1724,9 @@ class CustomMainWidget(QWidget):
         self.actionRestoreBackup = QAction(self.mainWindow)
         self.actionRestoreBackup.setObjectName("actionRestoreBackup")
 
+        self.actionImportRmmr = QAction(self.mainWindow)
+        self.actionImportRmmr.setObjectName("actionImportRmmr")
+
         self.actionSetApiKey = QAction(self.mainWindow)
         self.actionSetApiKey.setObjectName("actionSetApiKey")
 
@@ -1795,6 +1841,7 @@ class CustomMainWidget(QWidget):
         self.menuNexus.addAction(self.actionSetNexusMod)
         self.menuNexus.addAction(self.actionOpenNexusPage)
         self.menuNexus.addAction(self.actionRestoreBackup)
+        self.menuNexus.addAction(self.actionImportRmmr)
         self.menuNexus.addSeparator()
         self.menuNexus.addAction(self.actionSetApiKey)
         self.menuNexus.addAction(self.actionChangeArchiveFolder)
@@ -1914,6 +1961,10 @@ class CustomMainWidget(QWidget):
         self.actionOpenNexusPage.setText(translate("MainWindow", "Open Nexus Page"))
         self.actionOpenNexusPage.setShortcut("Ctrl+N")
         self.actionRestoreBackup.setText(translate("MainWindow", "Restore Previous Version..."))
+        self.actionImportRmmr.setText(translate("MainWindow", "Import from RMMR..."))
+        self.actionImportRmmr.setToolTip(
+            translate("MainWindow", "Add mods and Nexus IDs from Relapse's Mod Manager Redux")
+        )
         self.actionSetApiKey.setText(translate("MainWindow", "Set API Key..."))
         self.actionChangeArchiveFolder.setText(translate("MainWindow", "Change Download Folder..."))
         self.actionChangeBackupFolder.setText(translate("MainWindow", "Change Backup Folder..."))

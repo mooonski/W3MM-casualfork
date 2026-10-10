@@ -246,6 +246,15 @@ class Configuration:
         self.set('PATHS', 'backups', value)
 
     @property
+    def rmmr(self) -> str:
+        '''Folder of Relapse's Mod Manager Redux, remembered for importing'''
+        return self.get('PATHS', 'rmmr', '')
+
+    @rmmr.setter
+    def rmmr(self, value: str):
+        self.set('PATHS', 'rmmr', value)
+
+    @property
     def nexusapikey(self) -> str:
         from src.core.nexus import unprotectSecret
 
