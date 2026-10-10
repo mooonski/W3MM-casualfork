@@ -9,15 +9,17 @@ from sys import platform
 
 from PySide6.QtCore import (
     QByteArray,
+    QEvent,
     QFileInfo,
     QMetaObject,
+    QObject,
     QRect,
     QSize,
     Qt,
     QThread,
     Signal,
 )
-from PySide6.QtGui import QAction, QActionGroup, QBrush, QColor, QCursor, QResizeEvent
+from PySide6.QtGui import QAction, QActionGroup, QBrush, QColor, QCursor, QKeyEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -50,6 +52,7 @@ from src.core.installer import Installer
 from src.core.model import Model
 from src.core.nexus import (
     FAILED,
+    GAME_DOMAIN,
     UP_TO_DATE,
     UPDATE_AVAILABLE,
     ModFiles,
@@ -62,6 +65,7 @@ from src.core.nexus import (
     parseModReference,
     uniquePath,
 )
+from src.core.nxm import NxmLink, NxmRegistration, WindowsRegistry, forward, parseNxm
 from src.core.rmmr import RmmrError, applyImport, isRmmrFolder, planImport
 from src.core.updater import ModUpdater
 from src.domain.mod import Mod
@@ -129,6 +133,7 @@ class CustomMainWidget(QWidget):
         self.searchString = ""
         self.updateChecks: dict[str, UpdateCheck] = {}
         self.nexusWorker: NexusWorker | None = None
+        self.nxmQueue: list[str] = []
 
         self.modsSettingsWatcher = ModsSettingsWatcher()
         # connect to a method so the refresh always runs on the GUI thread
@@ -166,6 +171,12 @@ class CustomMainWidget(QWidget):
         self.actionAlert_to_run_Script_Merger.setChecked(data.getConfig().allowpopups == "1")
         self.actionUseNativeFileDialogs.setChecked(data.getConfig().get("SETTINGS", "usenativedialog", "1") == "1")
         self.actionKeepArchives.setChecked(data.getConfig().keeparchives == "1")
+        self.actionHandleNxm.setEnabled(platform == "win32")
+        if platform == "win32":
+            try:
+                self.actionHandleNxm.setChecked(self.nxmRegistration().isRegistered())
+            except OSError:
+                pass
 
     @debounceGui(200)
     def onResize(self):
@@ -360,6 +371,8 @@ class CustomMainWidget(QWidget):
         self.actionRefresh_Mod_List.triggered.connect(lambda e: self.refreshList())
         self.actionRefresh_Load_Order.triggered.connect(lambda e: self.refreshLoadOrder())
         self.actionSelect_All_Mods.triggered.connect(self.selectAllMods)
+        self.actionEnableAll.triggered.connect(lambda: self.setVisibleModsEnabled(True))
+        self.actionDisableAll.triggered.connect(lambda: self.setVisibleModsEnabled(False))
         self.actionRun_The_Game.triggered.connect(self.runTheGame)
         self.actionRun_Script_Merger.triggered.connect(self.runScriptMerger)
         self.actionMain_Web_Page.triggered.connect(lambda: openUrl(URL_WEB))
@@ -386,6 +399,7 @@ class CustomMainWidget(QWidget):
         self.actionRestoreBackup.triggered.connect(self.restoreBackup)
         self.actionImportRmmr.triggered.connect(self.importFromRmmr)
         self.actionKeepArchives.triggered.connect(self.keepArchivesChanged)
+        self.actionHandleNxm.triggered.connect(self.handleNxmChanged)
         self.actionSetApiKey.triggered.connect(lambda: askApiKey(self))
         self.actionChangeArchiveFolder.triggered.connect(self.changeArchiveFolder)
         self.actionChangeBackupFolder.triggered.connect(self.changeBackupFolder)
@@ -403,6 +417,7 @@ class CustomMainWidget(QWidget):
         self.textEdit.customContextMenuRequested.connect(self.openEditMenu)
 
         self.treeWidget.itemChanged.connect(self.modToggled)
+        self.treeWidget.installEventFilter(self)
         self.treeWidget.itemDoubleClicked.connect(self.modDoubleClicked)
         self.treeWidget.header().setStretchLastSection(False)
 
@@ -514,6 +529,8 @@ class CustomMainWidget(QWidget):
         menu.addAction(self.actionReinstall_Mods)
         menu.addAction(self.actionUninstall_Mods)
         menu.addAction(self.actionEnable_Disable_Mods)
+        menu.addAction(self.actionEnableAll)
+        menu.addAction(self.actionDisableAll)
         menu.exec(self.treeWidget.viewport().mapToGlobal(position))
 
     def openEditMenu(self, position):
@@ -1042,6 +1059,75 @@ class CustomMainWidget(QWidget):
         '''Selects all mods in the list'''
         self.treeWidget.selectAll()
 
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        '''Space in the mod list ticks or unticks all selected mods'''
+        if (
+            watched is self.treeWidget
+            and event.type() == QEvent.Type.KeyPress
+            and isinstance(event, QKeyEvent)
+            and event.key() == Qt.Key.Key_Space
+            and event.modifiers() == Qt.KeyboardModifier.NoModifier
+        ):
+            self.toggleSelectedMods()
+            return True
+        return super().eventFilter(watched, event)
+
+    def toggleSelectedMods(self) -> None:
+        '''Enables all selected mods, or disables them if they're all enabled already'''
+        names = [name for name in self.getSelectedMods() if name in self.model.modList]
+        if names:
+            self.setModsEnabled(names, not all(self.model.get(name).enabled for name in names))
+
+    def setVisibleModsEnabled(self, enabled: bool) -> None:
+        '''Enables or disables every mod shown in the list (respecting the search)'''
+        names = []
+        for index in range(self.treeWidget.topLevelItemCount()):
+            item = self.treeWidget.topLevelItem(index)
+            if item is not None:
+                names.append(item.text(1))
+        self.setModsEnabled(names, enabled)
+
+    def setModsEnabled(self, names: list[str], enabled: bool) -> int:
+        '''Enables or disables the named mods together, saving and refreshing once'''
+        changed = 0
+        for name in names:
+            mod = self.model.modList.get(name)
+            if mod is None or mod.enabled == enabled:
+                continue
+            try:
+                if enabled:
+                    for incomplete in mod.enable():
+                        self.output(
+                            translate("MainWindow", "Note: Additions to ")
+                            + incomplete
+                            + translate("MainWindow", " could not be automatically installed.")
+                        )
+                else:
+                    mod.disable()
+                changed += 1
+            except Exception as err:
+                self.output(formatUserError(err))
+        if not changed:
+            return 0
+        self.model.write()
+        self.treeWidget.blockSignals(True)
+        try:
+            for index in range(self.treeWidget.topLevelItemCount()):
+                item = self.treeWidget.topLevelItem(index)
+                mod = self.model.modList.get(item.text(1)) if item is not None else None
+                if item is not None and mod is not None:
+                    item.setCheckState(0, Qt.CheckState.Checked if mod.enabled else Qt.CheckState.Unchecked)
+        finally:
+            self.treeWidget.blockSignals(False)
+        self.refreshLoadOrder()
+        self.output(
+            (translate("MainWindow", "Enabled") if enabled else translate("MainWindow", "Disabled"))
+            + f" {changed} "
+            + translate("MainWindow", "mods")
+        )
+        self.alertRunScriptMerger()
+        return changed
+
     def enableDisableMods(self):
         '''Changes checked state of the selected mods'''
         try:
@@ -1084,8 +1170,15 @@ class CustomMainWidget(QWidget):
         worker.succeeded.connect(done)
         worker.failed.connect(lambda message: self.output(message))
         worker.finished.connect(lambda: self.setProgress(0))
+        worker.finished.connect(lambda: self.nexusFinished(worker))
         self.nexusWorker = worker
         worker.start()
+
+    def nexusFinished(self, worker: NexusWorker) -> None:
+        '''Starts the next queued Nexus link once the previous request is done'''
+        if self.nexusWorker is worker:
+            self.nexusWorker = None
+        self.processNxmQueue()
 
     def checkForUpdates(self, names: list[str] | None = None) -> None:
         '''Checks the given mods (default: all with a Nexus ID) and shows the updates dialog'''
@@ -1201,11 +1294,11 @@ class CustomMainWidget(QWidget):
                         file.size,
                         progress=lambda done, _total, base=offset: progress(base + done, totalBytes),
                     )
-                    results.append((name, modId, file, archive, ''))
+                    results.append((name, modId, file, archive, '', 0))
                 except NexusError as error:
                     if error.status in (401, 429):
                         raise
-                    results.append((name, modId, file, '', str(error)))
+                    results.append((name, modId, file, '', str(error), error.status))
                 offset += max(file.size, 1)
             return results
 
@@ -1217,11 +1310,15 @@ class CustomMainWidget(QWidget):
         )
         self.runNexus(work, self.applyUpdates)
 
-    def applyUpdates(self, results: list[tuple[str, int, NexusFile, str, str]]) -> None:
+    def applyUpdates(self, results: list[tuple[str, int, NexusFile, str, str, int]]) -> None:
         updated = failed = incomplete = 0
         updater = ModUpdater(self.model, output=self.output)
-        for index, (name, modId, file, archive, error) in enumerate(results):
+        for index, (name, modId, file, archive, error, status) in enumerate(results):
             mod = self.model.modList.get(name)
+            if status == 403 and mod is not None:
+                # free accounts can only download through the website's "Mod Manager Download" button
+                self.openNexusDownload(modId, file.fileId, name)
+                continue
             if error or mod is None:
                 self.output(f"{name}: {error or translate('MainWindow', 'no longer installed')}")
                 failed += 1
@@ -1410,6 +1507,140 @@ class CustomMainWidget(QWidget):
 
     def keepArchivesChanged(self) -> None:
         data.getConfig().keeparchives = "1" if self.actionKeepArchives.isChecked() else "0"
+
+    # nxm:// links
+
+    def nxmRegistration(self) -> NxmRegistration:
+        return NxmRegistration(WindowsRegistry(), data.getConfig())
+
+    def handleNxmChanged(self) -> None:
+        '''Makes this program the handler for Nexus "Mod Manager Download" links, or gives them back'''
+        registration = self.nxmRegistration()
+        try:
+            if self.actionHandleNxm.isChecked():
+                registration.register()
+                previous = registration.previous()
+                self.output(
+                    translate("MainWindow", "Nexus links (nxm://) now open here.")
+                    + (
+                        " " + translate("MainWindow", "Links for other games are passed to") + f" {previous}"
+                        if previous
+                        else ""
+                    )
+                )
+            elif registration.unregister():
+                self.output(translate("MainWindow", "Nexus links open with the previous program again."))
+            else:
+                self.output(
+                    translate(
+                        "MainWindow", "No previous program was recorded for Nexus links, so they still open here."
+                    )
+                )
+                self.actionHandleNxm.setChecked(True)
+        except OSError as error:
+            self.output(translate("MainWindow", "Could not change the Nexus link handler:") + f" {error}")
+            self.actionHandleNxm.setChecked(registration.isRegistered())
+
+    def openNexusDownload(self, modId: int, fileId: int, name: str) -> None:
+        '''Opens the website's download for a file, for accounts that can't download directly'''
+        openUrl(f"https://www.nexusmods.com/{GAME_DOMAIN}/mods/{modId}?tab=files&file_id={fileId}&nmm=1")
+        handled = self.actionHandleNxm.isChecked()
+        self.output(
+            f"{name}: "
+            + translate("MainWindow", "Nexus only allows direct downloads for Premium members.")
+            + " "
+            + translate("MainWindow", "Its download page is open in your browser; click 'Slow download'.")
+            + " "
+            + (
+                translate("MainWindow", "The download comes back here.")
+                if handled
+                else translate("MainWindow", "Turn on Nexus > Handle Nexus Links first, so the download comes here.")
+            )
+        )
+
+    def raiseWindow(self) -> None:
+        if self.mainWindow.isMinimized():
+            self.mainWindow.showNormal()
+        self.mainWindow.raise_()
+        self.mainWindow.activateWindow()
+
+    def handleNxm(self, url: str) -> None:
+        '''Queues a nxm:// link sent by the website (through Windows or another start of the program)'''
+        self.nxmQueue.append(url)
+        self.raiseWindow()
+        self.processNxmQueue()
+
+    def processNxmQueue(self) -> None:
+        while self.nxmQueue and not (self.nexusWorker is not None and self.nexusWorker.isRunning()):
+            url = self.nxmQueue.pop(0)
+            link = parseNxm(url)
+            if link is None:
+                self.output(translate("MainWindow", "Not a Nexus download link:") + f" {url}")
+                continue
+            if link.game != GAME_DOMAIN:
+                previous = data.getConfig().previousnxm
+                if previous and forward(previous, url):
+                    self.output(
+                        translate("MainWindow", "Passed the") + f" {link.game} " + translate("MainWindow", "link on")
+                    )
+                else:
+                    self.output(translate("MainWindow", "No program is set up for") + f" {link.game} " + "links")
+                continue
+            client = self.nexusClient()
+            if client is None:
+                self.nxmQueue.clear()
+                return
+            self.downloadNxm(client, link)
+            return
+
+    def downloadNxm(self, client: NexusClient, link: NxmLink) -> None:
+        archives = data.getConfig().archives
+
+        def work(progress):
+            file = None
+            try:
+                file = client.modFiles(link.modId).files.get(link.fileId)
+            except NexusError as error:
+                if error.status in (401, 429):
+                    raise
+            url = client.downloadLinks(link.modId, link.fileId, link.key, link.expires)[0]
+            name = file.fileName if file and file.fileName else f"{link.modId}-{link.fileId}.zip"
+            archive = client.download(url, archives, name, file.size if file else 0, progress=progress)
+            return link, file, archive
+
+        self.output(translate("MainWindow", "Downloading from Nexus..."))
+        self.runNexus(work, self.nxmDownloaded)
+
+    def nxmDownloaded(self, result: tuple[NxmLink, NexusFile | None, str]) -> None:
+        link, file, archive = result
+        filename = path.basename(archive)
+        self.output(translate("MainWindow", "Downloaded") + f" {filename}")
+        self.raiseWindow()
+        label = f"{file.name} {file.version}".strip() if file else filename
+        answer = QMessageBox.question(
+            self,
+            translate("MainWindow", "Nexus download"),
+            translate("MainWindow", "Downloaded") + f" {label}.\n\n" + translate("MainWindow", "Install it now?"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self.output(translate("MainWindow", "Kept in") + f" {path.dirname(archive)}")
+            return
+        self.installModFiles([archive])
+        if file is None:
+            return
+        # the website said exactly which file this is, so remember it on the entry it was installed into
+        changed = False
+        for mod in self.model.all():
+            if mod.nexus and mod.nexus.modId == link.modId and mod.nexus.archive == filename:
+                if mod.nexus.fileId != file.fileId:
+                    mod.nexus = NexusInfo.fromFile(link.modId, file, filename, link.game)
+                    self.updateChecks.pop(mod.name, None)
+                    changed = True
+        if changed:
+            self.model.write()
+            self.refreshList()
 
     def importFromRmmr(self) -> None:
         '''Adds mods and Nexus IDs from Relapse's Mod Manager Redux, after showing what will change'''
@@ -1759,6 +1990,12 @@ class CustomMainWidget(QWidget):
         self.actionSelect_All_Mods = QAction(self.mainWindow)
         self.actionSelect_All_Mods.setObjectName("actionSelect_All_Mods")
 
+        self.actionEnableAll = QAction(self.mainWindow)
+        self.actionEnableAll.setObjectName("actionEnableAll")
+
+        self.actionDisableAll = QAction(self.mainWindow)
+        self.actionDisableAll.setObjectName("actionDisableAll")
+
         self.actionSetPriority = QAction(self.mainWindow)
         self.actionSetPriority.setObjectName("actionSetPriority")
 
@@ -1844,6 +2081,10 @@ class CustomMainWidget(QWidget):
         self.actionKeepArchives = QAction(self.mainWindow)
         self.actionKeepArchives.setCheckable(True)
         self.actionKeepArchives.setObjectName("actionKeepArchives")
+
+        self.actionHandleNxm = QAction(self.mainWindow)
+        self.actionHandleNxm.setCheckable(True)
+        self.actionHandleNxm.setObjectName("actionHandleNxm")
 
         self.actionSetApiKey = QAction(self.mainWindow)
         self.actionSetApiKey.setObjectName("actionSetApiKey")
@@ -1932,6 +2173,8 @@ class CustomMainWidget(QWidget):
         self.menuFile.addAction(self.actionInstall_Mods)
         self.menuFile.addAction(self.actionUninstall_Mods)
         self.menuFile.addAction(self.actionEnable_Disable_Mods)
+        self.menuFile.addAction(self.actionEnableAll)
+        self.menuFile.addAction(self.actionDisableAll)
         self.menuFile.addSeparator()
         self.menuFile.addAction(self.actionOpenFolder)
         self.menuFile.addSeparator()
@@ -1964,6 +2207,7 @@ class CustomMainWidget(QWidget):
         self.menuNexus.addAction(self.actionSetApiKey)
         self.menuNexus.addAction(self.actionChangeArchiveFolder)
         self.menuNexus.addAction(self.actionKeepArchives)
+        self.menuNexus.addAction(self.actionHandleNxm)
         self.menuNexus.addAction(self.actionChangeBackupFolder)
 
         # --- Build Help menu ---
@@ -2037,6 +2281,10 @@ class CustomMainWidget(QWidget):
         self.actionRefresh_Load_Order.setShortcut("F6")
         self.actionSelect_All_Mods.setText(translate("MainWindow", "Select All Mods"))
         self.actionSelect_All_Mods.setShortcut("Ctrl+A")
+        self.actionEnableAll.setText(translate("MainWindow", "Enable All"))
+        self.actionEnableAll.setToolTip(translate("MainWindow", "Enable every mod shown in the list"))
+        self.actionDisableAll.setText(translate("MainWindow", "Disable All"))
+        self.actionDisableAll.setToolTip(translate("MainWindow", "Disable every mod shown in the list"))
         self.actionRun_The_Game.setText(translate("MainWindow", "Run the Game"))
         self.actionRun_The_Game.setShortcut("Ctrl+R")
         self.actionRun_Script_Merger.setText(translate("MainWindow", "Run Script Merger"))
@@ -2087,6 +2335,12 @@ class CustomMainWidget(QWidget):
         self.actionSetApiKey.setText(translate("MainWindow", "Set API Key..."))
         self.actionChangeArchiveFolder.setText(translate("MainWindow", "Change Download Folder..."))
         self.actionKeepArchives.setText(translate("MainWindow", "Keep Copies of Installed Archives"))
+        self.actionHandleNxm.setText(translate("MainWindow", "Handle Nexus Links (Mod Manager Download)"))
+        self.actionHandleNxm.setToolTip(
+            translate(
+                "MainWindow", "Open nxm:// links from the Nexus website here; other games go to the previous program"
+            )
+        )
         self.actionKeepArchives.setToolTip(
             translate("MainWindow", "Copy archives installed from other folders into the download folder")
         )

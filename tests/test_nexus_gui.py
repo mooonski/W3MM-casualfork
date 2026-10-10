@@ -187,8 +187,8 @@ class DownloadTests(HandlerTestCase):
         self.assertEqual(
             results,
             [
-                ("A", 5, first, str(Path(self.config.archives) / first.fileName), ""),
-                ("B", 6, second, str(Path(self.config.archives) / "6-2.zip"), ""),
+                ("A", 5, first, str(Path(self.config.archives) / first.fileName), "", 0),
+                ("B", 6, second, str(Path(self.config.archives) / "6-2.zip"), "", 0),
             ],
         )
         self.assertEqual([call.args for call in progress.call_args_list], [(1000, 2000), (2000, 2000)])
@@ -201,8 +201,8 @@ class DownloadTests(HandlerTestCase):
         CustomMainWidget.downloadAndUpdate(self.widget, [("A", nexusFile(1)), ("B", nexusFile(2))])
         work, _ = self.background()
         results = work(Mock())
-        self.assertEqual([(name, archive, error) for name, _, _, archive, error in results],
-                         [("A", "", "gone"), ("B", "archive.zip", "")])  # fmt: skip
+        self.assertEqual([(name, archive, error, status) for name, _, _, archive, error, status in results],
+                         [("A", "", "gone", 404), ("B", "archive.zip", "", 0)])  # fmt: skip
         self.client.downloadLinks.side_effect = NexusError("limit", 429)
         with self.assertRaises(NexusError):
             work(Mock())
@@ -223,9 +223,9 @@ class ApplyUpdatesTests(HandlerTestCase):
             CustomMainWidget.applyUpdates(
                 self.widget,
                 [
-                    ("A", 5, file, str(self.root / "a.zip"), ""),
-                    ("B", 6, file, str(self.root / "b.zip"), ""),
-                    ("C", 7, file, "", "download failed"),
+                    ("A", 5, file, str(self.root / "a.zip"), "", 0),
+                    ("B", 6, file, str(self.root / "b.zip"), "", 0),
+                    ("C", 7, file, "", "download failed", 500),
                 ],
             )
         calls = updater.return_value.update.call_args_list
@@ -241,7 +241,7 @@ class ApplyUpdatesTests(HandlerTestCase):
         self.widget.refreshList.assert_called()
 
     def test_no_successful_update_skips_script_merger_prompt(self):
-        CustomMainWidget.applyUpdates(self.widget, [("A", 5, nexusFile(1), "", "failed")])
+        CustomMainWidget.applyUpdates(self.widget, [("A", 5, nexusFile(1), "", "failed", 500)])
         self.widget.alertRunScriptMerger.assert_not_called()
 
 

@@ -4,7 +4,7 @@ import sys
 import tempfile
 import traceback
 from argparse import ArgumentParser
-from os import environ
+from os import environ, path
 
 
 def logStartupFailure(details: str) -> str | None:
@@ -62,6 +62,7 @@ if __name__ == "__main__":
         documentsPath: str = ''
         gamePath: str = ''
         configPath: str = ''
+        nxmLink: str = ''
         try:
             parser = ArgumentParser(description=getVersionString())
             parser.add_argument(
@@ -86,6 +87,7 @@ if __name__ == "__main__":
             )
             dirs.add_argument("-g", "--game", dest="game", type=str, default="", help="override the game path")
             dirs.add_argument("-c", "--config", dest="config", type=str, default="", help="override the config path")
+            parser.add_argument("--nxm", dest="nxm", type=str, default="", help="open a nxm:// link from Nexus Mods")
             args = parser.parse_args()
             data.debug = args.debug
             if args.version:
@@ -94,11 +96,31 @@ if __name__ == "__main__":
             documentsPath = args.userdocuments
             gamePath = args.game
             configPath = args.config
+            nxmLink = args.nxm
         except Exception as e:
             print(str(e))
 
         data.app = QApplication(sys.argv)
         data.config = Configuration(documentsPath, gamePath, configPath)
+        # a nxm link handler started by Windows uses the same overrides as the instance that registered it
+        for flag, value in (("-g", gamePath), ("-u", documentsPath), ("-c", configPath)):
+            if value:
+                data.config.startarguments += [flag, path.abspath(value)]
+
+        if nxmLink:
+            from src.core.nxm import forward, instanceName, parseNxm
+            from src.gui.nxm_server import sendToRunningInstance
+
+            link = parseNxm(nxmLink)
+            if link is not None and link.game != "witcher3":
+                previous = data.config.previousnxm
+                if not previous or not forward(previous, nxmLink):
+                    QMessageBox.warning(
+                        None, "Nexus link", f"No other program is set up to open {link.game} links:\n{nxmLink}"
+                    )
+                sys.exit(0)
+            if sendToRunningInstance(instanceName(data.config.configuration), nxmLink):
+                sys.exit(0)
 
         data.app.setStyle("Fusion")
 
@@ -136,7 +158,17 @@ if __name__ == "__main__":
         mainWindow.dropCallback = mainWidget.installModFiles
         data.app.setWindowIcon(getIcon("w3a.ico"))
 
+        from PySide6.QtCore import QTimer
+
+        from src.core.nxm import instanceName
+        from src.gui.nxm_server import NxmServer
+
+        nxmServer = NxmServer(instanceName(data.config.configuration), mainWidget)
+        nxmServer.received.connect(mainWidget.handleNxm)
+
         mainWindow.show()
+        if nxmLink:
+            QTimer.singleShot(0, lambda: mainWidget.handleNxm(nxmLink))
 
         ret = data.app.exec()
         data.config.saveWindowSettings(mainWidget, mainWindow)

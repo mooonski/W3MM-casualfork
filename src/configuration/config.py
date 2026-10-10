@@ -56,6 +56,8 @@ class Configuration:
 
         self.__writing_config = ReaderWriterLock()
         self.__writing_priority = ReaderWriterLock()
+        # start overrides (-g/-u/-c) this instance was started with, reused by the nxm link handler
+        self.startarguments: list[str] = []
 
         self.readConfig()
 
@@ -253,6 +255,16 @@ class Configuration:
     @keeparchives.setter
     def keeparchives(self, value: str):
         self.set('SETTINGS', 'keeparchives', value)
+
+    @property
+    def previousnxm(self) -> str:
+        '''The nxm:// handler command that was registered before this program took over'''
+        return self.get('NEXUS', 'previousnxm', '') or ''
+
+    @previousnxm.setter
+    def previousnxm(self, value: str):
+        # handler commands contain "%1", which the config file would otherwise read as interpolation
+        self.set('NEXUS', 'previousnxm', value.replace('%', '%%'))
 
     @property
     def rmmr(self) -> str:
