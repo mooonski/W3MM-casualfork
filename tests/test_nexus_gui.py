@@ -42,7 +42,11 @@ class HandlerTestCase(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.config = SimpleNamespace(
-            archives=str(self.root / "Archives"), backups=str(self.root / "Backups"), nexusapikey="key"
+            archives=str(self.root / "Archives"),
+            backups=str(self.root / "Backups"),
+            nexusapikey="key",
+            scriptmerger="",
+            gameversion="re",
         )
         config_patch = patch("src.gui.main_widget.data.config", self.config)
         config_patch.start()

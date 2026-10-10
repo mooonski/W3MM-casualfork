@@ -67,13 +67,13 @@ from src.core.nexus import (
 )
 from src.core.nxm import NxmLink, NxmRegistration, WindowsRegistry, forward, parseNxm
 from src.core.rmmr import RmmrError, applyImport, isRmmrFolder, planImport
+from src.core.scriptmerger import ConflictReport, analyse, findScriptMerger, installedVersion, isNewer, nexusId
 from src.core.updater import ModUpdater
 from src.domain.mod import Mod
 from src.globals import data
 from src.globals.constants import *
 from src.gui.alerts import (
     MessageAlertIncompleteInstallation,
-    MessageAlertScript,
     MessageUnsupportedOSAction,
 )
 from src.gui.details_dialog import DetailsDialog
@@ -86,6 +86,7 @@ from src.gui.nexus_dialogs import (
     askApiKey,
     statusText,
 )
+from src.gui.scriptmerger_dialog import MessageAlertScriptConflicts, ScriptConflictsDialog
 from src.gui.themes import get_dark_palette, get_light_palette, get_system_palette
 from src.gui.tree_widget import CustomTreeWidgetItem
 from src.util.syntax import *
@@ -161,6 +162,7 @@ class CustomMainWidget(QWidget):
         self.checkTheme()
         self.refreshList()
         self.reportDuplicates()
+        self.detectScriptMerger()
 
         QMetaObject.connectSlotsByName(self.mainWindow)
 
@@ -370,6 +372,7 @@ class CustomMainWidget(QWidget):
         self.actionEnable_Disable_Mods.triggered.connect(self.enableDisableMods)
         self.actionRefresh_Mod_List.triggered.connect(lambda e: self.refreshList())
         self.actionRefresh_Load_Order.triggered.connect(lambda e: self.refreshLoadOrder())
+        self.actionScriptConflicts.triggered.connect(self.showScriptConflicts)
         self.actionSelect_All_Mods.triggered.connect(self.selectAllMods)
         self.actionEnableAll.triggered.connect(lambda: self.setVisibleModsEnabled(True))
         self.actionDisableAll.triggered.connect(lambda: self.setVisibleModsEnabled(False))
@@ -1037,6 +1040,9 @@ class CustomMainWidget(QWidget):
         try:
             scriptmergerpath = data.getConfig().scriptmerger
             if not scriptmergerpath:
+                self.detectScriptMerger()
+                scriptmergerpath = data.getConfig().scriptmerger
+            if not scriptmergerpath:
                 self.changeScriptMergerPath()
                 scriptmergerpath = data.getConfig().scriptmerger
             if not scriptmergerpath:
@@ -1199,9 +1205,13 @@ class CustomMainWidget(QWidget):
             return
         modIds = sorted({mod.nexus.modId for mod in mods if mod.nexus})
         checked = [mod.name for mod in mods]
+        # Script Merger itself is checked along with all mods, when its version can be read
+        scriptMergerId = 0
+        if names is None and installedVersion(data.getConfig().scriptmerger):
+            scriptMergerId = nexusId(data.getConfig().gameversion)
 
         def work(progress):
-            results: dict[int, ModFiles | str] = {}
+            results: dict[int | str, ModFiles | str] = {}
             for index, modId in enumerate(modIds):
                 try:
                     results[modId] = client.modFiles(modId)
@@ -1210,6 +1220,13 @@ class CustomMainWidget(QWidget):
                         raise
                     results[modId] = str(error)
                 progress(index + 1, len(modIds))
+            if scriptMergerId:
+                try:
+                    results["scriptmerger"] = client.modFiles(scriptMergerId)
+                except NexusError as error:
+                    if error.status in (401, 429):
+                        raise
+                    results["scriptmerger"] = str(error)
             return results
 
         self.output(
@@ -1217,7 +1234,44 @@ class CustomMainWidget(QWidget):
         )
         self.runNexus(work, lambda results: self.updatesChecked(checked, results))
 
+    def scriptMergerChecked(self, files: ModFiles | str) -> None:
+        '''Reports whether a newer Script Merger is on Nexus'''
+        installed = installedVersion(data.getConfig().scriptmerger)
+        if isinstance(files, str):
+            self.output(translate("MainWindow", "Couldn't check Script Merger:") + f" {files}")
+            return
+        current = files.currentFiles()
+        main = [file for file in current if file.category == "MAIN"] or current
+        if not main or not installed:
+            return
+        latest = main[0]
+        if not isNewer(latest.version, installed):
+            self.output(translate("MainWindow", "Script Merger is up to date") + f" ({installed})")
+            return
+        url = f"https://www.nexusmods.com/{GAME_DOMAIN}/mods/{nexusId(data.getConfig().gameversion)}?tab=files"
+        self.output(
+            translate("MainWindow", "Script Merger")
+            + f" {latest.version} "
+            + translate("MainWindow", "is available, you have")
+            + f" {installed}: {url}"
+        )
+        answer = QMessageBox.question(
+            self,
+            translate("MainWindow", "Script Merger update"),
+            translate("MainWindow", "Script Merger")
+            + f" {latest.version} "
+            + translate("MainWindow", "is available, you have")
+            + f" {installed}.\n\n"
+            + translate("MainWindow", "Open its Nexus page?"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            openUrl(url)
+
     def updatesChecked(self, names: list[str], results: dict) -> None:
+        if "scriptmerger" in results:
+            self.scriptMergerChecked(results["scriptmerger"])
         rows = []
         learned = False
         for name in names:
@@ -1931,11 +1985,54 @@ class CustomMainWidget(QWidget):
 
     @throttle(2000)
     def alertRunScriptMerger(self):
-        '''Shows previous dialog based on settings'''
-        if data.getConfig().allowpopups == "1":
-            res = MessageAlertScript()
-            if res == QMessageBox.StandardButton.Yes:
-                self.runScriptMerger()
+        '''Asks to run Script Merger when scripts need merging (if alerts are on), at most every 2 seconds'''
+        self.promptScriptMerger()
+
+    def promptScriptMerger(self) -> None:
+        if data.getConfig().allowpopups != "1":
+            return
+        report = self.scriptConflictReport()
+        if report is None:
+            return
+        pending = report.pending
+        if not pending:
+            if report.conflicts:
+                self.output(translate("MainWindow", "Script conflicts are all merged."))
+            return
+        found = bool(data.getConfig().scriptmerger)
+        if MessageAlertScriptConflicts(pending, found) == QMessageBox.StandardButton.Yes:
+            self.runScriptMerger()
+
+    def scriptConflictReport(self) -> ConflictReport | None:
+        mods = data.getConfig().mods
+        if not mods:
+            return None
+        scriptmerger = data.getConfig().scriptmerger
+        try:
+            return analyse(mods, path.dirname(scriptmerger) if scriptmerger else '')
+        except OSError as err:
+            self.output(translate("MainWindow", "Couldn't check script conflicts:") + f" {err}")
+            return None
+
+    def detectScriptMerger(self) -> bool:
+        '''Looks for Script Merger when no path is set'''
+        config = data.getConfig()
+        if config.scriptmerger:
+            return True
+        found = findScriptMerger(config.game or '', config.archives, config.rmmr)
+        if found:
+            config.scriptmerger = found
+            self.output(translate("MainWindow", "Found Script Merger:") + f" {found}")
+        return bool(found)
+
+    def showScriptConflicts(self) -> None:
+        report = self.scriptConflictReport()
+        if report is None:
+            return
+        scriptmerger = data.getConfig().scriptmerger
+        dialog = ScriptConflictsDialog(self, report, scriptmerger, installedVersion(scriptmerger))
+        if dialog.exec():
+            self.runScriptMerger()
 
     def changeTheme(self, theme):
         data.getConfig().theme = theme
@@ -1986,6 +2083,9 @@ class CustomMainWidget(QWidget):
 
         self.actionRefresh_Load_Order = QAction(self.mainWindow)
         self.actionRefresh_Load_Order.setObjectName("actionRefresh_Load_Order")
+
+        self.actionScriptConflicts = QAction(self.mainWindow)
+        self.actionScriptConflicts.setObjectName("actionScriptConflicts")
 
         self.actionSelect_All_Mods = QAction(self.mainWindow)
         self.actionSelect_All_Mods.setObjectName("actionSelect_All_Mods")
@@ -2181,6 +2281,7 @@ class CustomMainWidget(QWidget):
         self.menuFile.addAction(self.actionReinstall_Mods)
         self.menuFile.addAction(self.actionRefresh_Mod_List)
         self.menuFile.addAction(self.actionRefresh_Load_Order)
+        self.menuFile.addAction(self.actionScriptConflicts)
         self.menuFile.addAction(self.actionSelect_All_Mods)
 
         # --- Build Edit menu ---
@@ -2279,6 +2380,11 @@ class CustomMainWidget(QWidget):
         )
         self.actionRefresh_Load_Order.setText(translate("MainWindow", "Refresh Load Order"))
         self.actionRefresh_Load_Order.setShortcut("F6")
+        self.actionScriptConflicts.setText(translate("MainWindow", "Script Conflicts..."))
+        self.actionScriptConflicts.setToolTip(
+            translate("MainWindow", "Scripts changed by more than one mod, and whether they are merged")
+        )
+        self.actionScriptConflicts.setShortcut("F8")
         self.actionSelect_All_Mods.setText(translate("MainWindow", "Select All Mods"))
         self.actionSelect_All_Mods.setShortcut("Ctrl+A")
         self.actionEnableAll.setText(translate("MainWindow", "Enable All"))
