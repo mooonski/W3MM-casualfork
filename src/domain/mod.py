@@ -8,6 +8,7 @@ from typing import List, Optional, Tuple, Union
 
 from PySide6.QtWidgets import QMessageBox
 
+from src.core.nexus import NexusInfo
 from src.domain.key import Key
 from src.domain.usersetting import Usersetting
 from src.globals import data
@@ -35,6 +36,7 @@ class Mod:
     hidden: List[str] = field(default_factory=list)
     readmes: List[str] = field(default_factory=list)
     inis: List[str] = field(default_factory=list)
+    nexus: Optional[NexusInfo] = None
 
     def __post_init__(self):
         self.date = strftime("%Y-%m-%d %H:%M:%S", gmtime())
@@ -410,13 +412,14 @@ class Mod:
             output.extend(repr(key) + newline for key in sorted(keys))
         return ''.join(output)
 
-    def installUserSettings(self) -> int:
+    def installUserSettings(self, keepExisting: bool = False) -> int:
+        '''Writes the mod's default settings. With keepExisting, values the user already has are left alone.'''
         added = 0
         if self.usersettings:
-            added = self.installUserSettingsToFile("user.settings")
+            added = self.installUserSettingsToFile("user.settings", keepExisting)
 
             if data.getConfig().gameversion in ("ng", "re"):
-                dx12AdditionCount = self.installUserSettingsToFile("dx12user.settings")
+                dx12AdditionCount = self.installUserSettingsToFile("dx12user.settings", keepExisting)
                 if added != dx12AdditionCount:
                     raise Exception(
                         self.name
@@ -427,7 +430,7 @@ class Mod:
                     )
         return added
 
-    def installUserSettingsToFile(self, fileName) -> int:
+    def installUserSettingsToFile(self, fileName, keepExisting: bool = False) -> int:
         added = 0
         absFilePath = data.getConfig().settings + "/" + fileName
         config = CaseSensitiveConfigParser(strict=False)
@@ -436,7 +439,8 @@ class Mod:
         for setting in iter(self.usersettings):
             if not config.has_section(setting.context):
                 config.add_section(setting.context)
-            config.set(setting.context, setting.option, setting.value)
+            if not (keepExisting and config.has_option(setting.context, setting.option)):
+                config.set(setting.context, setting.option, setting.value)
             added += 1
         with atomicWrite(absFilePath, 'w', encoding="utf-8", follow_symlinks=True) as userfile:
             config.write(userfile, space_around_delimiters=False)
@@ -473,6 +477,11 @@ class Mod:
             + self.priority
             + "\n"
         )
+        if self.nexus and self.nexus.modId:
+            string += "\n" + translate("MOD", "NEXUS:") + "\n" + self.nexus.url + "\n"
+            if self.nexus.fileName or self.nexus.version:
+                string += (self.nexus.fileName + " " + self.nexus.version).strip()
+                string += f" (file {self.nexus.fileId})\n" if self.nexus.fileId else "\n"
         if self.files:
             string += "\n" + translate("MOD", "DATA:") + "\n"
             for file in iter(self.files):

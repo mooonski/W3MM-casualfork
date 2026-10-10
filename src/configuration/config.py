@@ -228,6 +228,36 @@ class Configuration:
         self.set('PATHS', 'scriptmerger', value)
 
     @property
+    def archives(self) -> str:
+        '''Folder where downloaded mod archives are kept'''
+        return self.get('PATHS', 'archives') or path.join(self.__configPath, 'downloads')
+
+    @archives.setter
+    def archives(self, value: str):
+        self.set('PATHS', 'archives', value)
+
+    @property
+    def backups(self) -> str:
+        '''Folder where mods are backed up before they're updated'''
+        return self.get('PATHS', 'backups') or path.join(self.__configPath, 'backups')
+
+    @backups.setter
+    def backups(self, value: str):
+        self.set('PATHS', 'backups', value)
+
+    @property
+    def nexusapikey(self) -> str:
+        from src.core.nexus import unprotectSecret
+
+        return unprotectSecret(self.get('NEXUS', 'apikey', ''))
+
+    @nexusapikey.setter
+    def nexusapikey(self, value: str):
+        from src.core.nexus import protectSecret
+
+        self.set('NEXUS', 'apikey', protectSecret(value.strip()) if value.strip() else '')
+
+    @property
     def gameexe(self):
         configured = self.get('PATHS', 'gameexe')
         if configured:
@@ -418,6 +448,8 @@ class Configuration:
         self.set('WINDOW', 'section9', '50')
         self.set('WINDOW', 'section10', '45')
         self.set('WINDOW', 'section11', '120')
+        self.set('WINDOW', 'section12', '70')
+        self.set('WINDOW', 'section13', '90')
 
     @staticmethod
     def getGameRoot(gamePath: str) -> str:

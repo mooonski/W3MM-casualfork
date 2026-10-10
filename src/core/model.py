@@ -11,6 +11,7 @@ from shutil import copyfileobj
 from fasteners import InterProcessLock
 
 from src.core.fetcher import *
+from src.core.nexus import GAME_DOMAIN, NexusInfo
 from src.domain.key import Key
 from src.domain.mod import Mod
 from src.globals import data
@@ -199,6 +200,20 @@ class Model:
                 mod.readmes.append(b64decode(str(elem.text).encode("ascii")).decode("utf-8"))
             except:
                 print('could not decode readme')
+        nexus = root.find('nexus')
+        if nexus is not None:
+            try:
+                mod.nexus = NexusInfo(
+                    modId=int(nexus.get('modid') or 0),
+                    fileId=int(nexus.get('fileid') or 0),
+                    version=nexus.get('version') or '',
+                    fileName=nexus.get('filename') or '',
+                    uploaded=int(nexus.get('uploaded') or 0),
+                    archive=nexus.get('archive') or '',
+                    game=nexus.get('game') or GAME_DOMAIN,
+                )
+            except ValueError:
+                print('could not read nexus details of', mod.name)
 
         mod.checkPriority()
         return mod
@@ -244,4 +259,18 @@ class Model:
             for readme in mod.readmes:
                 us = XML.SubElement(elem, 'readmeb64')
                 us.text = b64encode(str(readme).encode("utf-8")).decode("ascii")
+        if mod.nexus and mod.nexus.modId:
+            nexus = XML.SubElement(elem, 'nexus')
+            nexus.set('game', mod.nexus.game)
+            nexus.set('modid', str(mod.nexus.modId))
+            if mod.nexus.fileId:
+                nexus.set('fileid', str(mod.nexus.fileId))
+            if mod.nexus.version:
+                nexus.set('version', mod.nexus.version)
+            if mod.nexus.fileName:
+                nexus.set('filename', mod.nexus.fileName)
+            if mod.nexus.uploaded:
+                nexus.set('uploaded', str(mod.nexus.uploaded))
+            if mod.nexus.archive:
+                nexus.set('archive', mod.nexus.archive)
         return root

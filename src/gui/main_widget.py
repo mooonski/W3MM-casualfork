@@ -18,6 +18,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QAction, QActionGroup, QCursor, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QFileDialog,
     QFileIconProvider,
     QHBoxLayout,
     QHeaderView,
@@ -31,6 +32,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSplitter,
+    QStyle,
     QTextEdit,
     QToolBar,
     QTreeWidget,
@@ -42,6 +44,20 @@ from watchdog.observers import Observer
 
 from src.core.installer import Installer
 from src.core.model import Model
+from src.core.nexus import (
+    FAILED,
+    UP_TO_DATE,
+    UPDATE_AVAILABLE,
+    ModFiles,
+    NexusClient,
+    NexusError,
+    NexusFile,
+    NexusInfo,
+    UpdateCheck,
+    checkForUpdate,
+    parseModReference,
+)
+from src.core.updater import ModUpdater
 from src.globals import data
 from src.globals.constants import *
 from src.gui.alerts import (
@@ -50,6 +66,7 @@ from src.gui.alerts import (
     MessageUnsupportedOSAction,
 )
 from src.gui.details_dialog import DetailsDialog
+from src.gui.nexus_dialogs import BackupsDialog, NexusWorker, UpdateRow, UpdatesDialog, askApiKey, statusText
 from src.gui.themes import get_dark_palette, get_light_palette, get_system_palette
 from src.gui.tree_widget import CustomTreeWidgetItem
 from src.util.syntax import *
@@ -95,6 +112,8 @@ class CustomMainWidget(QWidget):
         self.mainWindow = parent
         self.model = model
         self.searchString = ""
+        self.updateChecks: dict[str, UpdateCheck] = {}
+        self.nexusWorker: NexusWorker | None = None
 
         self.modsSettingsWatcher = ModsSettingsWatcher()
         # connect to a method so the refresh always runs on the GUI thread
@@ -343,6 +362,14 @@ class CustomMainWidget(QWidget):
         self.actionSetPriority.triggered.connect(self.setPriority)
         self.actionUnsetPriority.triggered.connect(self.unsetPriority)
         self.actionRestoreColumns.triggered.connect(self.restoreColumns)
+        self.actionCheckUpdates.triggered.connect(lambda: self.checkForUpdates())
+        self.actionUpdateMods.triggered.connect(self.updateSelectedMods)
+        self.actionSetNexusMod.triggered.connect(self.setNexusMod)
+        self.actionOpenNexusPage.triggered.connect(self.openNexusPage)
+        self.actionRestoreBackup.triggered.connect(self.restoreBackup)
+        self.actionSetApiKey.triggered.connect(lambda: askApiKey(self))
+        self.actionChangeArchiveFolder.triggered.connect(self.changeArchiveFolder)
+        self.actionChangeBackupFolder.triggered.connect(self.changeBackupFolder)
 
         self.scriptMergerButton.clicked.connect(self.runScriptMerger)
         self.runGameButton.clicked.connect(self.runTheGame)
@@ -375,6 +402,7 @@ class CustomMainWidget(QWidget):
         self.toolBar.addAction(self.actionInstall_Mods)
         self.toolBar.addAction(self.actionUninstall_Mods)
         self.toolBar.addAction(self.actionEnable_Disable_Mods)
+        self.toolBar.addAction(self.actionCheckUpdates)
         self.toolBar.setIconSize(QSize(32, 32))
         self.toolBar.addSeparator()
 
@@ -457,6 +485,11 @@ class CustomMainWidget(QWidget):
         menu.addAction(self.actionUnsetPriority)
         menu.addSeparator()
         menu.addAction(self.actionOpenFolder)
+        menu.addAction(self.actionOpenNexusPage)
+        menu.addSeparator()
+        menu.addAction(self.actionUpdateMods)
+        menu.addAction(self.actionSetNexusMod)
+        menu.addAction(self.actionRestoreBackup)
         menu.addSeparator()
         menu.addAction(self.actionRename)
         menu.addAction(self.actionReinstall_Mods)
@@ -476,7 +509,7 @@ class CustomMainWidget(QWidget):
         menu.addAction(self.actionAddToToolbar)
         rem = QMenu(menu)
         rem.setTitle(translate("MainWindow", "Remove.."))
-        actions = self.toolBar.actions()[14:]
+        actions = self.toolBar.actions()[15:]
         for action in actions:
             temp = self.makeTempAction(action)
             rem.addAction(temp)
@@ -1010,6 +1043,276 @@ class CustomMainWidget(QWidget):
             self.setProgress(0)
             self.output(formatUserError(err))
 
+    # Nexus
+
+    def nexusClient(self) -> NexusClient | None:
+        key = data.getConfig().nexusapikey or askApiKey(self)
+        return NexusClient(key) if key else None
+
+    def nexusBusy(self) -> bool:
+        if self.nexusWorker is not None and self.nexusWorker.isRunning():
+            self.output(translate("MainWindow", "Still working on the previous Nexus request..."))
+            return True
+        return False
+
+    def runNexus(self, work, done) -> None:
+        '''Runs work(progress) in the background and done(result) on the GUI thread'''
+        worker = NexusWorker(work, self)
+        worker.progressed.connect(lambda current, total: self.setProgress(100 * current / total if total else 0))
+        worker.succeeded.connect(done)
+        worker.failed.connect(lambda message: self.output(message))
+        worker.finished.connect(lambda: self.setProgress(0))
+        self.nexusWorker = worker
+        worker.start()
+
+    def checkForUpdates(self, names: list[str] | None = None) -> None:
+        '''Checks the given mods (default: all with a Nexus ID) and shows the updates dialog'''
+        if self.nexusBusy():
+            return
+        mods = [
+            mod for mod in self.model.all() if mod.nexus and mod.nexus.modId and (names is None or mod.name in names)
+        ]
+        if not mods:
+            self.output(
+                translate("MainWindow", "No mods with a Nexus ID to check.")
+                + " "
+                + translate("MainWindow", "Use Nexus > Set Nexus Mod... to link a mod to its Nexus page.")
+            )
+            return
+        client = self.nexusClient()
+        if client is None:
+            return
+        modIds = sorted({mod.nexus.modId for mod in mods if mod.nexus})
+        checked = [mod.name for mod in mods]
+
+        def work(progress):
+            results: dict[int, ModFiles | str] = {}
+            for index, modId in enumerate(modIds):
+                try:
+                    results[modId] = client.modFiles(modId)
+                except NexusError as error:
+                    if error.status in (401, 429):
+                        raise
+                    results[modId] = str(error)
+                progress(index + 1, len(modIds))
+            return results
+
+        self.output(
+            translate("MainWindow", "Checking") + f" {len(checked)} " + translate("MainWindow", "mods on Nexus...")
+        )
+        self.runNexus(work, lambda results: self.updatesChecked(checked, results))
+
+    def updatesChecked(self, names: list[str], results: dict) -> None:
+        rows = []
+        learned = False
+        for name in names:
+            mod = self.model.modList.get(name)
+            if mod is None or mod.nexus is None:
+                continue
+            files = results.get(mod.nexus.modId)
+            if isinstance(files, ModFiles):
+                check = checkForUpdate(mod.nexus, files, mod.name, mod.date)
+            else:
+                check = UpdateCheck(FAILED, message=str(files or translate("MainWindow", "No response")))
+            installed = check.installed
+            if check.confident and installed and mod.nexus.fileId != installed.fileId:
+                # identified the exact installed file (from its archive name), remember it
+                mod.nexus = NexusInfo.fromFile(mod.nexus.modId, installed, mod.nexus.archive, mod.nexus.game)
+                learned = True
+            self.updateChecks[name] = check
+            rows.append(UpdateRow(name, mod.nexus.version, check))
+        if learned:
+            self.model.write()
+        available = sum(1 for row in rows if row.check.state == UPDATE_AVAILABLE)
+        failed = sum(1 for row in rows if row.check.state == FAILED)
+        self.output(
+            "> "
+            + f"{available} "
+            + translate("MainWindow", "updates available")
+            + (f" ({failed} " + translate("MainWindow", "errors") + ")" if failed else "")
+        )
+        for row in rows:
+            if row.check.state == FAILED:
+                self.output(f"  {row.name}: {row.check.message}")
+        self.refreshList()
+        if not rows:
+            return
+        dialog = UpdatesDialog(self, rows)
+        if dialog.exec() and dialog.selection():
+            self.downloadAndUpdate(dialog.selection())
+
+    def updateSelectedMods(self) -> None:
+        selected = self.getSelectedMods()
+        if not selected:
+            self.output(translate("MainWindow", "Select the mods to update first."))
+            return
+        missing = [name for name in selected if not (self.model.get(name).nexus and self.model.get(name).nexus.modId)]
+        for name in missing:
+            self.output(name + ": " + translate("MainWindow", "no Nexus ID, use Set Nexus Mod... first"))
+        if len(missing) < len(selected):
+            self.checkForUpdates(selected)
+
+    def downloadAndUpdate(self, selection: list[tuple[str, NexusFile]]) -> None:
+        if self.nexusBusy():
+            return
+        client = self.nexusClient()
+        if client is None:
+            return
+        jobs = []
+        for name, file in selection:
+            mod = self.model.modList.get(name)
+            if mod is not None and mod.nexus:
+                jobs.append((name, mod.nexus.modId, file))
+        archives = data.getConfig().archives
+        totalBytes = sum(max(file.size, 1) for _, _, file in jobs)
+
+        def work(progress):
+            results = []
+            offset = 0
+            for name, modId, file in jobs:
+                try:
+                    url = client.downloadLinks(modId, file.fileId)[0]
+                    archive = client.download(
+                        url,
+                        archives,
+                        file.fileName or f"{modId}-{file.fileId}.zip",
+                        file.size,
+                        progress=lambda done, _total, base=offset: progress(base + done, totalBytes),
+                    )
+                    results.append((name, modId, file, archive, ''))
+                except NexusError as error:
+                    if error.status in (401, 429):
+                        raise
+                    results.append((name, modId, file, '', str(error)))
+                offset += max(file.size, 1)
+            return results
+
+        self.output(
+            translate("MainWindow", "Downloading")
+            + f" {len(jobs)} "
+            + translate("MainWindow", "files to")
+            + f" {archives}"
+        )
+        self.runNexus(work, self.applyUpdates)
+
+    def applyUpdates(self, results: list[tuple[str, int, NexusFile, str, str]]) -> None:
+        updated = failed = incomplete = 0
+        updater = ModUpdater(self.model, output=self.output)
+        for index, (name, modId, file, archive, error) in enumerate(results):
+            mod = self.model.modList.get(name)
+            if error or mod is None:
+                self.output(f"{name}: {error or translate('MainWindow', 'no longer installed')}")
+                failed += 1
+                continue
+            self.output(
+                translate("MainWindow", "Updating") + f" {name} " + translate("MainWindow", "to") + f" {file.version}"
+            )
+            updater.progress = lambda p, i=index: self.setProgress(100 * (i + p) / len(results))
+            game = mod.nexus.game if mod.nexus else NexusInfo().game
+            result = updater.update(mod, archive, NexusInfo.fromFile(modId, file, path.basename(archive), game))
+            if result.success:
+                updated += 1
+                self.updateChecks[name] = UpdateCheck(UP_TO_DATE, file, file, confident=True)
+            else:
+                failed += 1
+            if result.incomplete:
+                incomplete += 1
+        self.setProgress(0)
+        self.refreshList()
+        self.output(
+            "> "
+            + translate("MainWindow", "Updated")
+            + f" {updated} "
+            + translate("MainWindow", "mods")
+            + f" ({failed} "
+            + translate("MainWindow", "errors")
+            + ")"
+            + (f" ({incomplete} " + translate("MainWindow", "incomplete") + ")" if incomplete else "")
+        )
+        if incomplete:
+            MessageAlertIncompleteInstallation()
+        if updated:
+            self.alertRunScriptMerger()
+
+    def setNexusMod(self) -> None:
+        '''Links the selected mods to their Nexus mod pages'''
+        for name in self.getSelectedMods():
+            mod = self.model.get(name)
+            current = str(mod.nexus.modId) if mod.nexus and mod.nexus.modId else ""
+            text, ok = QInputDialog.getText(
+                self,
+                translate("MainWindow", "Set Nexus Mod") + f" - {name}",
+                translate("MainWindow", "Nexus mod ID or mod page URL (leave empty to unlink):"),
+                QLineEdit.EchoMode.Normal,
+                current,
+            )
+            if not ok:
+                return
+            if not text.strip():
+                mod.nexus = None
+            else:
+                modId = parseModReference(text)
+                if modId is None:
+                    self.output(translate("MainWindow", "Not a Nexus mod ID or Witcher 3 mod URL:") + f" {text}")
+                    continue
+                if not (mod.nexus and mod.nexus.modId == modId):
+                    mod.nexus = NexusInfo(modId)
+            self.updateChecks.pop(name, None)
+        self.model.write()
+        self.refreshList()
+
+    def openNexusPage(self) -> None:
+        for name in self.getSelectedMods():
+            mod = self.model.get(name)
+            if mod.nexus and mod.nexus.modId:
+                openUrl(mod.nexus.url)
+            else:
+                self.output(name + ": " + translate("MainWindow", "no Nexus ID, use Set Nexus Mod... first"))
+
+    def restoreBackup(self) -> None:
+        selected = self.getSelectedMods()
+        if len(selected) != 1:
+            self.output(translate("MainWindow", "Select one mod to restore."))
+            return
+        name = selected[0]
+        updater = ModUpdater(self.model, output=self.output)
+        backups = updater.listBackups(name)
+        if not backups:
+            self.output(name + ": " + translate("MainWindow", "no backups found in") + f" {data.getConfig().backups}")
+            return
+        dialog = BackupsDialog(self, name, backups)
+        backup = dialog.selected() if dialog.exec() else None
+        if backup is None:
+            return
+        updater.progress = lambda p: self.setProgress(100 * p)
+        result = updater.restore(backup)
+        self.updateChecks.pop(name, None)
+        self.setProgress(0)
+        self.refreshList()
+        if result.success:
+            self.output("> " + translate("MainWindow", "Restored") + f" {name} ({backup.label()})")
+            if result.incomplete:
+                MessageAlertIncompleteInstallation()
+            self.alertRunScriptMerger()
+        else:
+            self.output("> " + translate("MainWindow", "Could not restore") + f" {name}")
+
+    def changeArchiveFolder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self, translate("MainWindow", "Folder for downloaded mod archives"), data.getConfig().archives
+        )
+        if folder:
+            data.getConfig().archives = normalizePath(folder)
+            self.output(translate("MainWindow", "Downloads go to") + f" {data.getConfig().archives}")
+
+    def changeBackupFolder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self, translate("MainWindow", "Folder for mod backups"), data.getConfig().backups
+        )
+        if folder:
+            data.getConfig().backups = normalizePath(folder)
+            self.output(translate("MainWindow", "Backups go to") + f" {data.getConfig().backups}")
+
     def setSearchString(self, searchString):
         self.searchString = searchString
         self.refreshList(False)
@@ -1057,6 +1360,8 @@ class CustomMainWidget(QWidget):
                     userstr,
                     modsize,
                     mod.date,
+                    mod.nexus.version if mod.nexus else "",
+                    statusText(self.updateChecks.get(mod.name)),
                 )
             for item in selected:
                 rows = self.treeWidget.findItems(item, Qt.MatchFlag.MatchEndsWith, 1)
@@ -1128,6 +1433,8 @@ class CustomMainWidget(QWidget):
         settings,
         size,
         date,
+        version="",
+        update="",
     ):
         '''Adds mod data to the list'''
         if data_ == 0:
@@ -1173,8 +1480,12 @@ class CustomMainWidget(QWidget):
             str(settings),
             sizestr,
             str(date),
+            str(version),
+            str(update),
         ]
         item = CustomTreeWidgetItem(proplist)
+        item.setTextAlignment(12, Qt.AlignmentFlag.AlignCenter)
+        item.setTextAlignment(13, Qt.AlignmentFlag.AlignCenter)
         item.setTextAlignment(2, Qt.AlignmentFlag.AlignCenter)
         item.setTextAlignment(3, Qt.AlignmentFlag.AlignCenter)
         item.setTextAlignment(4, Qt.AlignmentFlag.AlignCenter)
@@ -1351,6 +1662,34 @@ class CustomMainWidget(QWidget):
         self.actionClearOutput = QAction(self.mainWindow)
         self.actionClearOutput.setObjectName("actionClearOutput")
 
+        # Nexus actions
+        self.actionCheckUpdates = QAction(self.mainWindow)
+        self.actionCheckUpdates.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
+        self.actionCheckUpdates.setIconVisibleInMenu(False)
+        self.actionCheckUpdates.setObjectName("actionCheckUpdates")
+        self.actionCheckUpdates.setIconText(translate("MainWindow", "Updates"))
+
+        self.actionUpdateMods = QAction(self.mainWindow)
+        self.actionUpdateMods.setObjectName("actionUpdateMods")
+
+        self.actionSetNexusMod = QAction(self.mainWindow)
+        self.actionSetNexusMod.setObjectName("actionSetNexusMod")
+
+        self.actionOpenNexusPage = QAction(self.mainWindow)
+        self.actionOpenNexusPage.setObjectName("actionOpenNexusPage")
+
+        self.actionRestoreBackup = QAction(self.mainWindow)
+        self.actionRestoreBackup.setObjectName("actionRestoreBackup")
+
+        self.actionSetApiKey = QAction(self.mainWindow)
+        self.actionSetApiKey.setObjectName("actionSetApiKey")
+
+        self.actionChangeArchiveFolder = QAction(self.mainWindow)
+        self.actionChangeArchiveFolder.setObjectName("actionChangeArchiveFolder")
+
+        self.actionChangeBackupFolder = QAction(self.mainWindow)
+        self.actionChangeBackupFolder.setObjectName("actionChangeBackupFolder")
+
         # Create language actions
         self.languageActionGroup = QActionGroup(self.mainWindow)
         for lang in os.listdir(getProgramRootFolder() + "/translations/"):
@@ -1381,6 +1720,10 @@ class CustomMainWidget(QWidget):
         self.menuEdit.setObjectName("menuEdit")
         self.menuEdit.setTitle(translate("MainWindow", "Edit"))
 
+        self.menuNexus = QMenu(self.menubar)
+        self.menuNexus.setObjectName("menuNexus")
+        self.menuNexus.setTitle(translate("MainWindow", "Nexus"))
+
         self.menuSettings = QMenu(self.menubar)
         self.menuSettings.setObjectName("menuSettings")
         self.menuSettings.setTitle(translate("MainWindow", "Settings"))
@@ -1407,6 +1750,7 @@ class CustomMainWidget(QWidget):
 
         self.menubar.addAction(self.menuFile.menuAction())
         self.menubar.addAction(self.menuEdit.menuAction())
+        self.menubar.addAction(self.menuNexus.menuAction())
         self.menubar.addAction(self.menuSettings.menuAction())
         self.menubar.addAction(self.menuHelp.menuAction())
 
@@ -1415,6 +1759,7 @@ class CustomMainWidget(QWidget):
 
         self.menuFile.clear()
         self.menuEdit.clear()
+        self.menuNexus.clear()
         self.menuSettings.clear()
         self.menuHelp.clear()
         self.menuConfigure_Settings.clear()
@@ -1442,6 +1787,18 @@ class CustomMainWidget(QWidget):
         self.menuEdit.addAction(self.actionDecreasePriority)
         self.menuEdit.addAction(self.actionIncreaseLoadOrderPriority)
         self.menuEdit.addAction(self.actionDecreaseLoadOrderPriority)
+
+        # --- Build Nexus menu ---
+        self.menuNexus.addAction(self.actionCheckUpdates)
+        self.menuNexus.addAction(self.actionUpdateMods)
+        self.menuNexus.addSeparator()
+        self.menuNexus.addAction(self.actionSetNexusMod)
+        self.menuNexus.addAction(self.actionOpenNexusPage)
+        self.menuNexus.addAction(self.actionRestoreBackup)
+        self.menuNexus.addSeparator()
+        self.menuNexus.addAction(self.actionSetApiKey)
+        self.menuNexus.addAction(self.actionChangeArchiveFolder)
+        self.menuNexus.addAction(self.actionChangeBackupFolder)
 
         # --- Build Help menu ---
         self.menuHelp.addAction(self.actionAbout)
@@ -1479,6 +1836,8 @@ class CustomMainWidget(QWidget):
         self.treeWidget.headerItem().setText(9, translate("MainWindow", "Settings"))
         self.treeWidget.headerItem().setText(10, translate("MainWindow", "Size"))
         self.treeWidget.headerItem().setText(11, translate("MainWindow", "Date Installed"))
+        self.treeWidget.headerItem().setText(12, translate("MainWindow", "Version"))
+        self.treeWidget.headerItem().setText(13, translate("MainWindow", "Update"))
 
         self.loadOrder.headerItem().setText(0, translate("MainWindow", "Load Order"))
         self.loadOrder.headerItem().setText(1, translate("MainWindow", "Priority"))
@@ -1545,3 +1904,16 @@ class CustomMainWidget(QWidget):
         self.actionSetPriority.setText(translate("MainWindow", "Set Priority"))
         self.actionUnsetPriority.setShortcut("Ctrl+U")
         self.actionUnsetPriority.setText(translate("MainWindow", "Remove Priority"))
+        self.actionCheckUpdates.setText(translate("MainWindow", "Check for Updates"))
+        self.actionCheckUpdates.setToolTip(translate("MainWindow", "Check all mods with a Nexus ID for updates"))
+        self.actionCheckUpdates.setShortcut("F7")
+        self.actionUpdateMods.setText(translate("MainWindow", "Update Selected Mods"))
+        self.actionUpdateMods.setToolTip(translate("MainWindow", "Check the selected mods and update them"))
+        self.actionUpdateMods.setShortcut("Ctrl+F7")
+        self.actionSetNexusMod.setText(translate("MainWindow", "Set Nexus Mod..."))
+        self.actionOpenNexusPage.setText(translate("MainWindow", "Open Nexus Page"))
+        self.actionOpenNexusPage.setShortcut("Ctrl+N")
+        self.actionRestoreBackup.setText(translate("MainWindow", "Restore Previous Version..."))
+        self.actionSetApiKey.setText(translate("MainWindow", "Set API Key..."))
+        self.actionChangeArchiveFolder.setText(translate("MainWindow", "Change Download Folder..."))
+        self.actionChangeBackupFolder.setText(translate("MainWindow", "Change Backup Folder..."))

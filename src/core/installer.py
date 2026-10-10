@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QMessageBox
 
 from src.core.fetcher import *
 from src.core.model import Model
+from src.core.nexus import NexusInfo, parseArchiveName
 from src.globals import data
 from src.globals.constants import translate
 from src.gui.alerts import MessageAlertModFromGamePath, MessageOverwrite
@@ -23,12 +24,14 @@ class Installer:
 
     model: Model
     ask: bool = True
+    keepUserSettings: bool = False
 
     progress: Callable[[float], Any] = lambda _: None
     output: Callable[[str], Any] = lambda _: None
 
-    def installMod(self, modPath: str) -> Tuple[bool, int, int]:
-        '''Installs mod from given path. If given mod is an archive first extracts it'''
+    def installMod(self, modPath: str, name: str | None = None) -> Tuple[bool, int, int]:
+        '''Installs mod from given path. If given mod is an archive first extracts it.
+        With name, the mod is stored under exactly that name.'''
 
         gamePath = data.getConfig().game
         realModPath = path.realpath(modPath)
@@ -48,7 +51,10 @@ class Installer:
         installCount = 0
         incompleteCount = 0
         modname = path.split(modPath)[1]
-        self.output(translate("MainWindow", "Installing") + " " + Mod.formatName(modname))
+        nexusArchive = parseArchiveName(modname)
+        if name is None and nexusArchive:
+            modname = nexusArchive[0]
+        self.output(translate("MainWindow", "Installing") + " " + (name or Mod.formatName(modname)))
         self.progress(0.1)
         mod = None
         result = True
@@ -57,9 +63,14 @@ class Installer:
             mod, directories, config_files = fetchMod(modPath, extraction.name)
 
             mod.date = strftime("%Y-%m-%d %H:%M:%S", gmtime())
-            mod.name = modname
+            if name:
+                mod._name = name
+            else:
+                mod.name = modname
             if not Mod.formatName(mod.name):
                 raise ValueError('Mod name must not be empty')
+            if nexusArchive:
+                mod.nexus = NexusInfo(modId=nexusArchive[1], version=nexusArchive[2], archive=path.basename(modPath))
 
             if not data.getConfig().mods:
                 raise Exception(translate("MainWindow", "Mods folder does not exist and could not be created."))
@@ -185,7 +196,7 @@ class Installer:
                     + translate("MainWindow", " could not be automatically installed.")
                 )
             try:
-                mod.installUserSettings()
+                mod.installUserSettings(self.keepUserSettings)
             except Exception as err:
                 incomplete = True
                 self.output(formatUserError(err))
@@ -221,6 +232,7 @@ class Installer:
                     installed.inis = mod.inis
                     installed.inputsettings = mod.inputsettings
                     installed.readmes = mod.readmes
+                    installed.nexus = mod.nexus or installed.nexus
                     exists = True
                     break
             if not exists:
