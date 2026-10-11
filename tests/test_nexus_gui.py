@@ -455,6 +455,55 @@ class DialogTests(unittest.TestCase):
         dialog.keyPressEvent(space)
         self.assertEqual(dialog.selection(), [])
 
+    def test_changes_follow_the_selected_row_and_file(self):
+        files = ModFiles.fromApi(
+            {
+                'files': [
+                    {
+                        'file_id': 1,
+                        'name': 'Example',
+                        'version': '1.0',
+                        'category_name': 'OLD_VERSION',
+                        'uploaded_timestamp': 100,
+                    },
+                    {
+                        'file_id': 2,
+                        'name': 'Example',
+                        'version': '2.0',
+                        'category_name': 'MAIN',
+                        'uploaded_timestamp': 200,
+                        'changelog_html': 'See https://example.com/notes<br>Faster',
+                    },
+                    {
+                        'file_id': 3,
+                        'name': 'Example',
+                        'version': '2.1',
+                        'category_name': 'MAIN',
+                        'uploaded_timestamp': 300,
+                    },
+                ],
+                'file_updates': [],
+            }
+        )
+        old, new, newest = files.files[1], files.files[2], files.files[3]
+        check = UpdateCheck(UPDATE_AVAILABLE, old, new, [new, newest, old], confident=True, files=files)
+        url = "https://www.nexusmods.com/witcher3/mods/7"
+        dialog = UpdatesDialog(None, [UpdateRow("Alpha", "1.0", check, url)])
+        text = dialog.changes.toHtml()
+        self.assertIn("v2.0", text)
+        self.assertIn('href="https://example.com/notes"', text)
+        self.assertIn("Faster", text)
+        self.assertIn(url + "?tab=logs", text)
+        dialog.combos["Alpha"].setCurrentIndex(1)
+        self.assertIn("v2.0", dialog.changes.toPlainText())
+        dialog.combos["Alpha"].setCurrentIndex(2)
+        self.assertIn("This is the installed file.", dialog.changes.toPlainText())
+
+    def test_changes_without_a_changelog(self):
+        dialog, _, _ = self.dialog()
+        self.assertEqual(dialog.tree.currentItem().text(0), "Alpha")
+        self.assertEqual(dialog.changes.toPlainText(), "")
+
     def test_backups_dialog_selects_newest(self):
         backups = [Backup("b", "A", "2026-10-10", "update", "2.0"), Backup("a", "A", "2026-10-01", "update", "1.0")]
         dialog = BackupsDialog(None, "A", backups)

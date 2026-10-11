@@ -1,5 +1,7 @@
 '''Nexus dialogs and background worker'''
 
+import html
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -19,6 +21,8 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QSplitter,
+    QTextBrowser,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -34,6 +38,7 @@ from src.core.nexus import (
     NexusError,
     NexusFile,
     UpdateCheck,
+    changesBetween,
 )
 from src.core.rmmr import ADD, LINK, SKIP, ImportPlan
 from src.core.updater import Backup
@@ -130,6 +135,43 @@ class UpdateRow:
     name: str
     installedVersion: str
     check: UpdateCheck
+    url: str = ''
+
+
+def changesHtml(check: UpdateCheck, target: NexusFile | None, url: str = '') -> str:
+    '''What changed between the installed file and the target, as shown under the updates list'''
+    logs = url + '?tab=logs' if url else ''
+    if check.files is None or target is None:
+        return ''
+    if check.installed is not None and check.installed.fileId == target.fileId:
+        return '<p>' + html.escape(translate("Nexus", "This is the installed file.")) + '</p>'
+    changes = changesBetween(check.files, check.installed, target)
+    parts = []
+    if check.installed is None:
+        parts.append(
+            '<p><i>'
+            + html.escape(translate("Nexus", "The installed file isn't known, so only the newest changes are shown."))
+            + '</i></p>'
+        )
+    for version, lines in changes:
+        heading = version if version.lower().startswith('v') or not version[:1].isdigit() else 'v' + version
+        parts.append(f"<p><b>{html.escape(heading)}</b></p><ul>")
+        parts.extend(f"<li>{linkify(line)}</li>" for line in lines)
+        parts.append('</ul>')
+    if not changes:
+        parts.append(
+            '<p>' + html.escape(translate("Nexus", "The author didn't write a changelog for this file.")) + '</p>'
+        )
+    if logs:
+        parts.append(
+            f'<p><a href="{html.escape(logs)}">' + html.escape(translate("Nexus", "All changes on Nexus")) + '</a></p>'
+        )
+    return ''.join(parts)
+
+
+def linkify(line: str) -> str:
+    '''Escapes a changelog line and makes web addresses clickable'''
+    return re.sub(r'(https?://[^\s<]+)', r'<a href="\1">\1</a>', html.escape(line))
 
 
 class UpdatesDialog(QDialog):
@@ -171,7 +213,18 @@ class UpdatesDialog(QDialog):
         self.tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.tree.header().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self.tree.header().resizeSection(0, 300)
-        layout.addWidget(self.tree)
+
+        self.changes = QTextBrowser(self)
+        self.changes.setOpenExternalLinks(True)
+        self.changes.setPlaceholderText(translate("Nexus", "Select a mod to see what changed."))
+        splitter = QSplitter(Qt.Orientation.Vertical, self)
+        splitter.addWidget(self.tree)
+        splitter.addWidget(self.changes)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        splitter.setChildrenCollapsible(False)
+        layout.addWidget(splitter)
+        self.rowsByName = {row.name: row for row in rows}
 
         for row in sorted(rows, key=lambda r: (r.check.state != UPDATE_AVAILABLE, r.name.lower())):
             check = row.check
@@ -196,6 +249,7 @@ class UpdatesDialog(QDialog):
                     selected = index
             combo.setCurrentIndex(selected)
             combo.currentIndexChanged.connect(lambda _, it=item: it.setCheckState(0, Qt.CheckState.Checked))
+            combo.currentIndexChanged.connect(lambda _, it=item: self.showChanges(it))
             self.tree.setItemWidget(item, 2, combo)
             self.combos[row.name] = combo
             if check.state == UPDATE_AVAILABLE:
@@ -216,6 +270,23 @@ class UpdatesDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+        self.tree.currentItemChanged.connect(lambda current, _: self.showChanges(current))
+        if self.tree.topLevelItemCount():
+            self.tree.setCurrentItem(self.tree.topLevelItem(0))
+
+    def showChanges(self, item: QTreeWidgetItem | None) -> None:
+        '''Shows the changelog for the row's chosen file, if that row is the current one'''
+        if item is None or item is not self.tree.currentItem():
+            return
+        name = item.data(0, Qt.ItemDataRole.UserRole)
+        row = self.rowsByName.get(name)
+        combo = self.combos.get(name)
+        target = combo.currentData() if combo else None
+        if row is None or row.check.state == FAILED:
+            self.changes.clear()
+            return
+        self.changes.setHtml(changesHtml(row.check, target if isinstance(target, NexusFile) else None, row.url))
 
     def keyPressEvent(self, event):
         '''Space ticks or unticks all selected rows'''

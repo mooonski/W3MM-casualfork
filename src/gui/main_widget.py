@@ -1429,7 +1429,7 @@ class CustomMainWidget(QWidget):
                 mod.nexus = NexusInfo.fromFile(mod.nexus.modId, installed, mod.nexus.archive, mod.nexus.game)
                 learned = True
             self.updateChecks[name] = check
-            rows.append(UpdateRow(name, mod.nexus.version, check))
+            rows.append(UpdateRow(name, mod.nexus.version, check, mod.nexus.url))
         if learned:
             self.model.write()
         available = sum(1 for row in rows if row.check.state == UPDATE_AVAILABLE)

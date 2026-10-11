@@ -1,6 +1,7 @@
 '''Nexus Mods API client and update resolution'''
 
 import calendar
+import html
 import json
 import os
 import re
@@ -49,6 +50,7 @@ class NexusFile:
     fileName: str
     size: int
     description: str = ''
+    changelog: str = ''
 
     @classmethod
     def fromApi(cls, value: dict[str, Any]) -> 'NexusFile':
@@ -62,6 +64,7 @@ class NexusFile:
             fileName=str(value.get('file_name') or ''),
             size=int(value.get('size_in_bytes') or int(value.get('size_kb') or 0) * 1024),
             description=str(value.get('description') or ''),
+            changelog=str(value.get('changelog_html') or ''),
         )
 
     @property
@@ -171,6 +174,7 @@ class UpdateCheck:
     candidates: list[NexusFile] = field(default_factory=list)
     confident: bool = False
     message: str = ''
+    files: ModFiles | None = None
 
     @property
     def needsChoice(self) -> bool:
@@ -277,6 +281,12 @@ def rankCandidates(files: ModFiles, reference: str) -> list[NexusFile]:
 
 def checkForUpdate(info: NexusInfo, files: ModFiles, modName: str, installDate: str) -> UpdateCheck:
     '''Works out whether a newer version of the installed file exists'''
+    check = _checkForUpdate(info, files, modName, installDate)
+    check.files = files
+    return check
+
+
+def _checkForUpdate(info: NexusInfo, files: ModFiles, modName: str, installDate: str) -> UpdateCheck:
     current = files.currentFiles()
     if not current:
         return UpdateCheck(FAILED, message='No current files on Nexus')
@@ -314,6 +324,57 @@ def checkForUpdate(info: NexusInfo, files: ModFiles, modName: str, installDate: 
     if best.uploaded > installedAt:
         return UpdateCheck(UPDATE_AVAILABLE, installed, best, candidates, confident=False)
     return UpdateCheck(UP_TO_DATE, installed, best, candidates, confident=False)
+
+
+# ---------------------------------------------------------------- changelogs
+
+
+def changelogLines(text: str) -> list[str]:
+    '''The lines of a Nexus file changelog, which may contain some HTML'''
+    text = re.sub(r'(?i)<br\s*/?>|</p>|</li>|</div>', '\n', text)
+    text = html.unescape(re.sub(r'<[^>]+>', '', text))
+    lines = []
+    for line in text.splitlines():
+        line = line.strip().lstrip('-*•').strip()
+        if line:
+            lines.append(line)
+    return lines
+
+
+def versionKey(version: str) -> str:
+    return version.strip().casefold().removeprefix('v').strip()
+
+
+def changesBetween(files: ModFiles, installed: NexusFile | None, target: NexusFile) -> list[tuple[str, list[str]]]:
+    '''The changelogs of the versions after the installed file up to and including the target, newest first.
+    Without a known installed file, only the target's own changelog.'''
+    after = installed.uploaded if installed else target.uploaded - 1
+    targetKey = nameKey(target.name)
+    chain = set()
+    if installed is not None:
+        current = installed.fileId
+        while current in files.updates and current not in chain:
+            current = files.updates[current]
+            chain.add(current)
+    installedVersion = versionKey(installed.version) if installed else ''
+    versions: dict[str, tuple[int, str, list[str]]] = {}
+    for file in files.files.values():
+        if not file.changelog or not after < file.uploaded <= target.uploaded:
+            continue
+        sameLine = file.fileId == target.fileId or file.fileId in chain
+        if not sameLine and similarity(nameKey(file.name), targetKey) < SAME_LINE_SIMILARITY:
+            continue
+        key = versionKey(file.version) or nameKey(file.name)
+        if installedVersion and key == installedVersion:
+            continue
+        lines = changelogLines(file.changelog)
+        if not lines:
+            continue
+        uploaded, version, known = versions.get(key, (file.uploaded, file.version or file.name, []))
+        known += [line for line in lines if line not in known]
+        versions[key] = (min(uploaded, file.uploaded), version, known)
+    ordered = sorted(versions.values(), key=lambda entry: entry[0], reverse=True)
+    return [(version, lines) for _, version, lines in ordered]
 
 
 # ---------------------------------------------------------------- API key storage

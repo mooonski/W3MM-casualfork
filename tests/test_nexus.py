@@ -20,6 +20,8 @@ from src.core.nexus import (
     NexusClient,
     NexusError,
     NexusInfo,
+    changelogLines,
+    changesBetween,
     checkForUpdate,
     parseArchiveName,
     parseModReference,
@@ -30,8 +32,9 @@ from src.core.nexus import (
 from src.core.updater import ModUpdater
 
 
-def apiFile(fileId, name, version, category, uploaded, fileName='', primary=False):
+def apiFile(fileId, name, version, category, uploaded, fileName='', primary=False, changelog=''):
     return {
+        'changelog_html': changelog or None,
         'file_id': fileId,
         'name': name,
         'version': version,
@@ -145,6 +148,55 @@ class UpdateResolutionTests(unittest.TestCase):
     def test_no_current_files_is_an_error(self):
         files = modFiles([apiFile(1, "A", "1", "ARCHIVED", 1)])
         self.assertEqual(checkForUpdate(NexusInfo(5, fileId=1), files, "A", "").state, FAILED)
+
+
+class ChangelogTests(unittest.TestCase):
+    def files(self):
+        return modFiles(
+            [
+                apiFile(1, 'Example', '1.0', 'OLD_VERSION', 100, changelog='First release'),
+                apiFile(2, 'Example', '1.1', 'OLD_VERSION', 200, changelog='Fixed a crash<br>Faster loading'),
+                apiFile(3, 'Example', '1.2', 'MAIN', 300, changelog='Remastered support\n- New menu'),
+                apiFile(4, 'Example Lite', '1.2', 'OPTIONAL', 300, changelog='Remastered support'),
+                apiFile(5, 'Unrelated Textures', '9.0', 'OPTIONAL', 250, changelog='Sharper textures'),
+                apiFile(6, 'Example', '1.3', 'MAIN', 400),
+            ],
+            updates=[(1, 2), (2, 3)],
+        )
+
+    def test_lines_from_html(self):
+        self.assertEqual(
+            changelogLines('<p>Fixed &amp; improved</p><ul><li>One</li><li>- Two</li></ul>\n\n* Three'),
+            ['Fixed & improved', 'One', 'Two', 'Three'],
+        )
+        self.assertEqual(changelogLines(''), [])
+
+    def test_versions_after_installed_up_to_target_newest_first(self):
+        files = self.files()
+        changes = changesBetween(files, files.files[1], files.files[3])
+        self.assertEqual(
+            changes,
+            [('1.2', ['Remastered support', 'New menu']), ('1.1', ['Fixed a crash', 'Faster loading'])],
+        )
+
+    def test_files_of_the_same_version_are_merged(self):
+        files = self.files()
+        changes = changesBetween(files, files.files[2], files.files[4])
+        self.assertEqual(changes, [('1.2', ['Remastered support', 'New menu'])])
+
+    def test_unknown_installed_file_shows_only_the_target(self):
+        files = self.files()
+        self.assertEqual(changesBetween(files, None, files.files[2]), [('1.1', ['Fixed a crash', 'Faster loading'])])
+
+    def test_no_changelog_and_older_target(self):
+        files = self.files()
+        self.assertEqual(changesBetween(files, files.files[3], files.files[6]), [])
+        self.assertEqual(changesBetween(files, files.files[3], files.files[1]), [])
+
+    def test_check_keeps_the_files(self):
+        files = self.files()
+        check = checkForUpdate(NexusInfo(modId=7, fileId=2), files, 'Example', '')
+        self.assertIs(check.files, files)
 
 
 class SecretTests(unittest.TestCase):
