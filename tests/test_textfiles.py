@@ -29,11 +29,13 @@ class OpenTextFileTests(unittest.TestCase):
                 util.openTextFile(str(Path(folder, "missing.settings")))  # lets openFile report it
                 fallback.assert_called_once()
 
-    def test_the_toolbar_uses_it_for_the_four_files(self):
+    def test_the_toolbar_buttons(self):
         source = Path("src/gui/main_widget.py").read_text(encoding="utf-8")
-        for name in ('"/input.xml"', '"/input.settings"', "data.getConfig().usersettings", '"/mods.settings"'):
-            line = next(line for line in source.splitlines() if name in line and "openTextFile" in line)
-            self.assertIn("openTextFile", line)
+        line = next(line for line in source.splitlines() if '"/input.xml"' in line)
+        self.assertIn("openTextFile", line, "input.xml opens in Notepad")
+        self.assertIn("self.showGameSettings(KEYS_TAB)", source)
+        self.assertIn("self.showGameSettings(USER_TAB)", source)
+        self.assertIn("actionTemp.triggered.connect(self.showLoadOrderPanel)", source)
 
 
 if __name__ == "__main__":

@@ -134,6 +134,7 @@ from src.gui.nexus_dialogs import (
 from src.gui.requirements_dialog import RequirementsDialog
 from src.gui.saves_dialog import SaveBackupsDialog
 from src.gui.scriptmerger_dialog import MessageAlertScriptConflicts, ScriptConflictsDialog
+from src.gui.settings_dialog import KEYS_TAB, USER_TAB, GameSettingsDialog
 from src.gui.themes import get_dark_palette, get_light_palette, get_system_palette, statusColor
 from src.gui.tree_widget import GROUP_ROLE, CustomTreeWidgetItem, GroupItem, ModTree, isGroupItem
 from src.util.syntax import *
@@ -492,6 +493,7 @@ class CustomMainWidget(QWidget):
         self.actionScriptConflicts.triggered.connect(self.showScriptConflicts)
         self.actionFileConflicts.triggered.connect(self.showFileConflicts)
         self.actionHealthCheck.triggered.connect(self.showHealthCheck)
+        self.actionGameSettings.triggered.connect(lambda: self.showGameSettings(USER_TAB))
         self.actionSelect_All_Mods.triggered.connect(self.selectAllMods)
         self.actionEnableAll.triggered.connect(lambda: self.setVisibleModsEnabled(True))
         self.actionDisableAll.triggered.connect(lambda: self.setVisibleModsEnabled(False))
@@ -629,26 +631,30 @@ class CustomMainWidget(QWidget):
         self.toolBar.addAction(actionTemp)
 
         actionTemp = QAction(self.mainWindow)
-        actionTemp.triggered.connect(lambda: openTextFile(data.getConfig().settings + "/input.settings"))
+        actionTemp.triggered.connect(lambda: self.showGameSettings(KEYS_TAB))
         actionTemp.setText(translate("MainWindow", "Input Settings"))
         actionTemp.setIcon(icon("keyboard"))
-        actionTemp.setToolTip(translate("MainWindow", "Open input.settings file"))
+        actionTemp.setToolTip(
+            translate("MainWindow", "Your key bindings (input.settings), with the ones from your mods")
+        )
         self.toolBar.addAction(actionTemp)
 
         actionTemp = QAction(self.mainWindow)
-        actionTemp.triggered.connect(
-            lambda: openTextFile(data.getConfig().settings + "/" + data.getConfig().usersettings)
-        )
+        actionTemp.triggered.connect(lambda: self.showGameSettings(USER_TAB))
         actionTemp.setText(translate("MainWindow", "User Settings"))
         actionTemp.setIcon(icon("sliders"))
-        actionTemp.setToolTip(translate("MainWindow", "Open user.settings file"))
+        actionTemp.setToolTip(
+            translate("MainWindow", "The game's settings (user.settings), including your mods' options")
+        )
         self.toolBar.addAction(actionTemp)
 
         actionTemp = QAction(self.mainWindow)
-        actionTemp.triggered.connect(lambda: openTextFile(data.getConfig().settings + "/mods.settings"))
+        actionTemp.triggered.connect(self.showLoadOrderPanel)
         actionTemp.setText(translate("MainWindow", "Mods Settings"))
         actionTemp.setIcon(icon("order"))
-        actionTemp.setToolTip(translate("MainWindow", "Open mods.settings file"))
+        actionTemp.setToolTip(
+            translate("MainWindow", "The load order (mods.settings) is the list on the right; drag mods to change it")
+        )
         self.toolBar.addAction(actionTemp)
 
         self.toolBar.addSeparator()
@@ -2236,6 +2242,30 @@ class CustomMainWidget(QWidget):
                 translate("MainWindow", "Nexus > Make W3MM the Default for Nexus Links takes them back any time.")
             )
 
+    def showGameSettings(self, tab: int = USER_TAB) -> None:
+        config = data.getConfig()
+        GameSettingsDialog(
+            self,
+            config.settings,
+            config.usersettings,
+            config.menu or "",
+            list(self.model.all()),
+            config.backups,
+            tab,
+            self.output,
+        ).exec()
+
+    def showLoadOrderPanel(self) -> None:
+        """mods.settings holds what the load order panel shows, so the button goes there"""
+        self.loadOrder.setFocus()
+        if self.loadOrder.topLevelItemCount() and self.loadOrder.currentItem() is None:
+            self.loadOrder.setCurrentItem(self.loadOrder.topLevelItem(0))
+        self.output(
+            translate("MainWindow", "The load order on the right is mods.settings: drag mods to change it.")
+            + " "
+            + translate("MainWindow", "Mods > Game Settings... shows the game's other settings.")
+        )
+
     def openNexusDownload(self, modId: int, fileId: int, name: str) -> None:
         '''Opens the website's download for a file, for accounts that can't download directly'''
         openUrl(f"https://www.nexusmods.com/{GAME_DOMAIN}/mods/{modId}?tab=files&file_id={fileId}&nmm=1")
@@ -3459,6 +3489,9 @@ class CustomMainWidget(QWidget):
         self.actionFileConflicts = QAction(self.mainWindow)
         self.actionFileConflicts.setObjectName("actionFileConflicts")
 
+        self.actionGameSettings = QAction(self.mainWindow)
+        self.actionGameSettings.setObjectName("actionGameSettings")
+
         self.actionHealthCheck = QAction(self.mainWindow)
         self.actionHealthCheck.setObjectName("actionHealthCheck")
 
@@ -3686,6 +3719,7 @@ class CustomMainWidget(QWidget):
         self.menuFile.addAction(self.actionScriptConflicts)
         self.menuFile.addAction(self.actionFileConflicts)
         self.menuFile.addAction(self.actionHealthCheck)
+        self.menuFile.addAction(self.actionGameSettings)
         self.menuFile.addAction(self.actionSelect_All_Mods)
 
         # --- Build Edit menu ---
@@ -3825,6 +3859,10 @@ class CustomMainWidget(QWidget):
         )
         self.actionScriptConflicts.setShortcut("F8")
         self.actionHealthCheck.setText(translate("MainWindow", "Health Check..."))
+        self.actionGameSettings.setText(translate("MainWindow", "Game Settings..."))
+        self.actionGameSettings.setToolTip(
+            translate("MainWindow", "The game's settings and key bindings, with what your mods added")
+        )
         self.actionHealthCheck.setIconText(translate("MainWindow", "Health Check"))
         self.actionHealthCheck.setToolTip(translate("MainWindow", "Look for problems with the installed mods"))
         self.actionHealthCheck.setShortcut("F9")
