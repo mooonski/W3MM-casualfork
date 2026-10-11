@@ -42,7 +42,6 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QTextEdit,
     QToolBar,
-    QTreeWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -124,7 +123,7 @@ from src.gui.requirements_dialog import RequirementsDialog
 from src.gui.saves_dialog import SaveBackupsDialog
 from src.gui.scriptmerger_dialog import MessageAlertScriptConflicts, ScriptConflictsDialog
 from src.gui.themes import get_dark_palette, get_light_palette, get_system_palette, statusColor
-from src.gui.tree_widget import GROUP_ROLE, CustomTreeWidgetItem, GroupItem, isGroupItem
+from src.gui.tree_widget import GROUP_ROLE, CustomTreeWidgetItem, GroupItem, ModTree, isGroupItem
 from src.util.syntax import *
 from src.util.util import *
 
@@ -354,7 +353,7 @@ class CustomMainWidget(QWidget):
     def setupTreeWidget(self):
         '''Setup tree widget and load order panel'''
         # Mod list tree widget
-        self.treeWidget = QTreeWidget(self.centralwidget)
+        self.treeWidget = ModTree(self.centralwidget)
         self.treeWidget.setMinimumSize(QSize(600, 350))
         self.treeWidget.setUniformRowHeights(True)
         self.treeWidget.setAnimated(True)
@@ -529,6 +528,9 @@ class CustomMainWidget(QWidget):
 
         self.treeWidget.itemChanged.connect(self.modToggled)
         self.treeWidget.itemClicked.connect(self.modClicked)
+        # queued, so the list is filled again after Qt has finished with the drag
+        self.treeWidget.modsDropped.connect(self.modsDroppedOnSeparator, Qt.ConnectionType.QueuedConnection)
+        self.treeWidget.separatorDropped.connect(self.separatorDroppedOnSeparator, Qt.ConnectionType.QueuedConnection)
         self.treeWidget.itemExpanded.connect(lambda item: self.groupFolded(item, False))
         self.treeWidget.itemCollapsed.connect(lambda item: self.groupFolded(item, True))
         self.treeWidget.installEventFilter(self)
@@ -2805,6 +2807,7 @@ class CustomMainWidget(QWidget):
         """Headings for the mod list's groups (and one for mods without a group), or none when no group exists"""
         order = orderedGroups(data.getConfig().groups, self.model.all())
         self.treeWidget.setRootIsDecorated(bool(order))
+        self.treeWidget.setDragEnabled(bool(order))
         headers = {}
         if not order:
             return headers
@@ -2890,6 +2893,23 @@ class CustomMainWidget(QWidget):
             mod.group = name
         order = orderedGroups(data.getConfig().groups, self.model.all())
         self.saveGroups(addGroup(order, name) if name else order)
+
+    def modsDroppedOnSeparator(self, names: list[str], name: str) -> None:
+        """Mods were dragged onto a separator ("" is Other mods)"""
+        mods = [self.model.modList[n] for n in names if n in self.model.modList]
+        if not mods or all(mod.group == name for mod in mods):
+            return
+        for mod in mods:
+            mod.group = name
+        self.saveGroups(orderedGroups(data.getConfig().groups, self.model.all()))
+
+    def separatorDroppedOnSeparator(self, dragged: str, target: str) -> None:
+        """A separator was dragged onto another one, and takes its place (onto Other mods: goes last)"""
+        order = orderedGroups(data.getConfig().groups, self.model.all())
+        if dragged not in order:
+            return
+        goal = order.index(target) if target in order else len(order) - 1
+        self.saveGroups(moveGroup(order, dragged, goal - order.index(dragged)))
 
     def addSeparator(self) -> None:
         """Adds an empty separator with a plain name; it can be renamed from its right-click menu"""
