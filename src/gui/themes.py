@@ -78,6 +78,7 @@ STATUS_COLORS = {
     'problem': (QColor(224, 108, 108), QColor(179, 38, 30)),
     'warning': (QColor(229, 160, 80), QColor(163, 82, 0)),
     'muted': (QColor(160, 160, 160), QColor(110, 110, 110)),
+    'ok': (QColor(120, 190, 120), QColor(30, 120, 50)),
 }
 
 
@@ -89,7 +90,7 @@ def isDark(palette: QPalette | None = None) -> bool:
 
 
 def statusColor(kind: str, palette: QPalette | None = None) -> QColor:
-    '''A colour for "problem", "warning" or "muted" text that's readable in the current theme'''
+    '''A colour for "problem", "warning", "muted" or "ok" text that's readable in the current theme'''
     dark, light = STATUS_COLORS[kind]
     return QColor(dark if isDark(palette) else light)
 

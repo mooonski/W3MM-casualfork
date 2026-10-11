@@ -55,6 +55,8 @@ from src.core.health import ERROR, INFO, WARNING, Issue, checkHealth
 from src.core.installer import Installer
 from src.core.model import Model
 from src.core.nexus import (
+    ABSTAINED,
+    ENDORSED,
     FAILED,
     GAME_DOMAIN,
     UP_TO_DATE,
@@ -89,8 +91,11 @@ from src.gui.health_dialog import HealthDialog
 from src.gui.icons import icon
 from src.gui.mod_preview import ModPreview
 from src.gui.nexus_dialogs import (
+    ENDORSE,
     SWITCH,
     BackupsDialog,
+    EndorseDialog,
+    EndorseRow,
     NexusFileDialog,
     NexusWorker,
     RmmrImportDialog,
@@ -450,6 +455,7 @@ class CustomMainWidget(QWidget):
         self.actionSetNexusMod.triggered.connect(self.setNexusMod)
         self.actionChooseFile.triggered.connect(self.chooseInstalledFile)
         self.actionOpenNexusPage.triggered.connect(self.openNexusPage)
+        self.actionEndorse.triggered.connect(self.endorseMods)
         self.actionRestoreBackup.triggered.connect(self.restoreBackup)
         self.actionImportRmmr.triggered.connect(self.importFromRmmr)
         self.actionRefreshDetails.triggered.connect(lambda: self.refreshNexusDetails())
@@ -595,6 +601,7 @@ class CustomMainWidget(QWidget):
         menu.addSeparator()
         menu.addAction(self.actionOpenFolder)
         menu.addAction(self.actionOpenNexusPage)
+        menu.addAction(self.actionEndorse)
         menu.addSeparator()
         menu.addAction(self.actionUpdateMods)
         menu.addAction(self.actionSetNexusMod)
@@ -2002,6 +2009,77 @@ class CustomMainWidget(QWidget):
         if not silent:
             self.output(translate("MainWindow", "Loaded Nexus details for") + " " + plural(len(found), "mod"))
 
+    def endorseMods(self) -> None:
+        '''Shows how the linked mods are rated on Nexus and endorses (or abstains from) the ticked ones'''
+        if self.nexusBusy():
+            return
+        rows: dict[int, EndorseRow] = {}
+        for mod in sorted(self.model.all(), key=lambda m: m.name.lower()):
+            if mod.nexus and mod.nexus.modId:
+                row = rows.setdefault(mod.nexus.modId, EndorseRow([], mod.nexus.modId, mod.nexus.version, ""))
+                row.names.append(mod.name)
+        if not rows:
+            self.output(translate("MainWindow", "No mods with a Nexus ID."))
+            return
+        client = self.nexusClient()
+        if client is None:
+            return
+        selected = []
+        for name in self.getSelectedMods():
+            mod = self.model.modList.get(name)
+            if mod is not None and mod.nexus and mod.nexus.modId:
+                selected.append(mod.nexus.modId)
+        self.runNexus(
+            lambda progress: client.endorsements(),
+            lambda statuses: self.endorsementsLoaded(client, list(rows.values()), statuses, selected),
+        )
+
+    def endorsementsLoaded(self, client: NexusClient, rows: list, statuses: dict, selected: list[int]) -> None:
+        for row in rows:
+            row.status = statuses.get(row.modId, "")
+        ticked = [modId for modId in selected if statuses.get(modId) != ENDORSED]
+        dialog = EndorseDialog(self, rows, ticked)
+        if not dialog.exec() or not dialog.action:
+            return
+        endorse = dialog.action == ENDORSE
+        chosen = [row for row in dialog.selection() if row.status != (ENDORSED if endorse else ABSTAINED)]
+        if not chosen:
+            return
+
+        def work(progress):
+            results = []
+            for index, row in enumerate(chosen):
+                try:
+                    results.append((row, client.endorse(row.modId, row.version, endorse), ""))
+                except NexusError as error:
+                    if error.status in (401, 429):
+                        raise
+                    results.append((row, "", str(error)))
+                progress(index + 1, len(chosen))
+            return results
+
+        self.output(
+            (translate("MainWindow", "Endorsing") if endorse else translate("MainWindow", "Abstaining from"))
+            + " "
+            + plural(len(chosen), "mod")
+            + " "
+            + translate("MainWindow", "on Nexus...")
+        )
+        self.runNexus(work, lambda results: self.endorsementsSent(results, endorse))
+
+    def endorsementsSent(self, results: list, endorse: bool) -> None:
+        done = [row for row, status, error in results if not error]
+        self.output(
+            "> "
+            + (translate("MainWindow", "Endorsed") if endorse else translate("MainWindow", "Abstained from"))
+            + " "
+            + plural(len(done), "mod")
+            + (": " + ", ".join(row.names[0] for row in done) if done else "")
+        )
+        for row, status, error in results:
+            if error:
+                self.output(f"  {row.names[0]}: {error}")
+
     def checkRequirementsAfterInstall(self, archives: list[str]) -> None:
         '''After installing Nexus downloads, says if those mods need anything that isn't installed'''
         modIds = set()
@@ -2669,6 +2747,9 @@ class CustomMainWidget(QWidget):
         self.actionOpenNexusPage = QAction(self.mainWindow)
         self.actionOpenNexusPage.setObjectName("actionOpenNexusPage")
 
+        self.actionEndorse = QAction(self.mainWindow)
+        self.actionEndorse.setObjectName("actionEndorse")
+
         self.actionRestoreBackup = QAction(self.mainWindow)
         self.actionRestoreBackup.setObjectName("actionRestoreBackup")
 
@@ -2810,6 +2891,7 @@ class CustomMainWidget(QWidget):
         self.menuNexus.addAction(self.actionSetNexusMod)
         self.menuNexus.addAction(self.actionChooseFile)
         self.menuNexus.addAction(self.actionOpenNexusPage)
+        self.menuNexus.addAction(self.actionEndorse)
         self.menuNexus.addAction(self.actionRestoreBackup)
         self.menuNexus.addAction(self.actionImportRmmr)
         self.menuNexus.addSeparator()
@@ -2960,6 +3042,10 @@ class CustomMainWidget(QWidget):
             translate("MainWindow", "Record which file of the Nexus page is installed, or switch to another file")
         )
         self.actionOpenNexusPage.setText(translate("MainWindow", "Open Nexus Page"))
+        self.actionEndorse.setText(translate("MainWindow", "Endorse Mods..."))
+        self.actionEndorse.setToolTip(
+            translate("MainWindow", "See which of your mods you endorsed on Nexus, and endorse the ones you like")
+        )
         self.actionOpenNexusPage.setShortcut("Ctrl+N")
         self.actionRestoreBackup.setText(translate("MainWindow", "Restore Previous Version..."))
         self.actionImportRmmr.setText(translate("MainWindow", "Import from RMMR..."))

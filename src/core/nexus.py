@@ -411,6 +411,16 @@ def unprotectSecret(value: str) -> str:
 
 # ---------------------------------------------------------------- HTTP client
 
+ENDORSED = 'Endorsed'
+ABSTAINED = 'Abstained'
+
+# what Nexus answers when it won't take an endorsement
+ENDORSE_REFUSALS = {
+    'NOT_DOWNLOADED_MOD': 'Nexus only takes endorsements from people who downloaded the mod from Nexus.',
+    'TOO_SOON_AFTER_DOWNLOAD': 'Nexus only takes endorsements a little while after downloading. Try again later.',
+    'IS_OWN_MOD': "You can't endorse your own mod.",
+}
+
 
 class NexusClient:
     '''Minimal Nexus Mods v1 API client'''
@@ -439,9 +449,17 @@ class NexusClient:
         }
 
     def _get(self, path: str) -> Any:
+        return self._request(path)
+
+    def _post(self, path: str, values: dict[str, str]) -> Any:
+        return self._request(path, urllib.parse.urlencode(values).encode('ascii'))
+
+    def _request(self, path: str, body: bytes | None = None) -> Any:
         if not self.apikey:
             raise NexusError('No Nexus API key is set. Add one under Nexus > Set API Key.')
-        request = urllib.request.Request(API_URL + path, headers=self.headers)
+        request = urllib.request.Request(
+            API_URL + path, data=body, headers=self.headers, method='GET' if body is None else 'POST'
+        )
         try:
             with self.opener(request, timeout=self.timeout) as response:
                 for name, value in response.headers.items():
@@ -467,6 +485,8 @@ class NexusClient:
             pass
         if error.code == 401:
             return 'Nexus rejected the API key. Check it under Nexus > Set API Key.'
+        if detail in ENDORSE_REFUSALS:
+            return ENDORSE_REFUSALS[detail]
         if error.code == 403:
             return detail or 'Nexus refused the request. Direct downloads need a Premium account.'
         if error.code == 404:
@@ -483,6 +503,24 @@ class NexusClient:
 
     def modFiles(self, modId: int) -> ModFiles:
         return ModFiles.fromApi(self._get(f"games/{self.game}/mods/{int(modId)}/files.json"))
+
+    def endorsements(self) -> dict[int, str]:
+        '''How the user has rated mods of this game: mod ID -> "Endorsed" or "Abstained"'''
+        found = {}
+        for item in self._get('user/endorsements.json') or []:
+            try:
+                if item.get('domain_name') == self.game:
+                    found[int(item['mod_id'])] = str(item.get('status') or '')
+            except (AttributeError, KeyError, TypeError, ValueError):
+                continue
+        return found
+
+    def endorse(self, modId: int, version: str = '', endorse: bool = True) -> str:
+        '''Endorses a mod (or abstains from endorsing it) and returns its new status'''
+        action = 'endorse' if endorse else 'abstain'
+        result = self._post(f"games/{self.game}/mods/{int(modId)}/{action}.json", {'version': version})
+        status = str(result.get('status') or '') if isinstance(result, dict) else ''
+        return status if status in (ENDORSED, ABSTAINED) else (ENDORSED if endorse else ABSTAINED)
 
     def downloadLinks(self, modId: int, fileId: int, key: str = '', expires: str = '') -> list[str]:
         path = f"games/{self.game}/mods/{int(modId)}/files/{int(fileId)}/download_link.json"

@@ -245,6 +245,40 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(NexusError):
             NexusClient("", opener=opener).validate()
 
+    def test_endorsements_and_endorsing(self):
+        requests = []
+        answers = [
+            [
+                {'mod_id': 820, 'domain_name': 'witcher3', 'status': 'Endorsed'},
+                {'mod_id': 5, 'domain_name': 'skyrim', 'status': 'Endorsed'},
+                {'mod_id': 'bad', 'domain_name': 'witcher3'},
+                {'mod_id': 9, 'domain_name': 'witcher3', 'status': 'Abstained'},
+            ],
+            {'message': 'Updated endorse status', 'status': 'Endorsed'},
+            {'message': 'odd'},
+        ]
+
+        def opener(request, timeout):
+            requests.append(request)
+            return FakeResponse(json.dumps(answers.pop(0)).encode())
+
+        client = NexusClient("key", opener=opener)
+        self.assertEqual(client.endorsements(), {820: 'Endorsed', 9: 'Abstained'})
+        self.assertEqual(requests[0].get_method(), 'GET')
+        self.assertEqual(client.endorse(820, '5.01'), 'Endorsed')
+        self.assertTrue(requests[1].full_url.endswith('/v1/games/witcher3/mods/820/endorse.json'))
+        self.assertEqual((requests[1].get_method(), requests[1].data), ('POST', b'version=5.01'))
+        self.assertEqual(client.endorse(9, '', endorse=False), 'Abstained')
+        self.assertTrue(requests[2].full_url.endswith('/mods/9/abstain.json'))
+
+    def test_endorse_refusals_are_explained(self):
+        def opener(request, timeout):
+            body = json.dumps({'message': 'NOT_DOWNLOADED_MOD', 'status': 'Error'}).encode()
+            raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", {}, io.BytesIO(body))
+
+        with self.assertRaisesRegex(NexusError, 'downloaded the mod from Nexus'):
+            NexusClient("key", opener=opener).endorse(1)
+
     def test_download_never_overwrites_and_reuses_identical_file(self):
         with tempfile.TemporaryDirectory() as directory:
             client = NexusClient("key", opener=lambda request, timeout: FakeResponse(b"new archive"))
