@@ -478,7 +478,8 @@ def translateToChosenLanguage() -> bool:
     language = data.getConfig().language
     if language and os.path.exists(getProgramRootFolder() + "/translations/" + language):
         print("loading translation", language)
-        data.translator.load("translations/" + language)
+        # by full path: a nxm link can start the program from any folder
+        data.translator.load(getProgramRootFolder() + "/translations/" + language)
         if not data.getApp().installTranslator(data.translator):
             print("loading translation failed", file=sys.stderr)
             return False
