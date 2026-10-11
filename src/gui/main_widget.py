@@ -48,6 +48,7 @@ from watchdog.observers import Observer
 
 from src.core.duplicates import duplicateEntries, matchingEntries, versionNote
 from src.core.fetcher import isArchive
+from src.core.health import ERROR, WARNING, checkHealth
 from src.core.installer import Installer
 from src.core.model import Model
 from src.core.nexus import (
@@ -77,6 +78,7 @@ from src.gui.alerts import (
     MessageUnsupportedOSAction,
 )
 from src.gui.details_dialog import DetailsDialog
+from src.gui.health_dialog import HealthDialog
 from src.gui.nexus_dialogs import (
     BackupsDialog,
     NexusWorker,
@@ -163,6 +165,7 @@ class CustomMainWidget(QWidget):
         self.refreshList()
         self.reportDuplicates()
         self.detectScriptMerger()
+        self.reportHealth()
 
         QMetaObject.connectSlotsByName(self.mainWindow)
 
@@ -373,6 +376,7 @@ class CustomMainWidget(QWidget):
         self.actionRefresh_Mod_List.triggered.connect(lambda e: self.refreshList())
         self.actionRefresh_Load_Order.triggered.connect(lambda e: self.refreshLoadOrder())
         self.actionScriptConflicts.triggered.connect(self.showScriptConflicts)
+        self.actionHealthCheck.triggered.connect(self.showHealthCheck)
         self.actionSelect_All_Mods.triggered.connect(self.selectAllMods)
         self.actionEnableAll.triggered.connect(lambda: self.setVisibleModsEnabled(True))
         self.actionDisableAll.triggered.connect(lambda: self.setVisibleModsEnabled(False))
@@ -2034,6 +2038,26 @@ class CustomMainWidget(QWidget):
         if dialog.exec():
             self.runScriptMerger()
 
+    def healthIssues(self) -> list:
+        try:
+            return checkHealth(self.model, data.getConfig(), self.scriptConflictReport())
+        except OSError as err:
+            self.output(translate("MainWindow", "Couldn't run the health check:") + f" {err}")
+            return []
+
+    def showHealthCheck(self) -> None:
+        HealthDialog(self, self.healthIssues(), self.healthIssues).exec()
+
+    def reportHealth(self) -> None:
+        '''Mentions problems at startup, without opening anything'''
+        issues = [issue for issue in self.healthIssues() if issue.severity in (ERROR, WARNING)]
+        if issues:
+            self.output(
+                translate("MainWindow", "Health check:")
+                + f" {len(issues)} "
+                + translate("MainWindow", "problems or warnings (Mods > Health Check...)")
+            )
+
     def changeTheme(self, theme):
         data.getConfig().theme = theme
         if theme == "Dark":
@@ -2086,6 +2110,9 @@ class CustomMainWidget(QWidget):
 
         self.actionScriptConflicts = QAction(self.mainWindow)
         self.actionScriptConflicts.setObjectName("actionScriptConflicts")
+
+        self.actionHealthCheck = QAction(self.mainWindow)
+        self.actionHealthCheck.setObjectName("actionHealthCheck")
 
         self.actionSelect_All_Mods = QAction(self.mainWindow)
         self.actionSelect_All_Mods.setObjectName("actionSelect_All_Mods")
@@ -2282,6 +2309,7 @@ class CustomMainWidget(QWidget):
         self.menuFile.addAction(self.actionRefresh_Mod_List)
         self.menuFile.addAction(self.actionRefresh_Load_Order)
         self.menuFile.addAction(self.actionScriptConflicts)
+        self.menuFile.addAction(self.actionHealthCheck)
         self.menuFile.addAction(self.actionSelect_All_Mods)
 
         # --- Build Edit menu ---
@@ -2385,6 +2413,9 @@ class CustomMainWidget(QWidget):
             translate("MainWindow", "Scripts changed by more than one mod, and whether they are merged")
         )
         self.actionScriptConflicts.setShortcut("F8")
+        self.actionHealthCheck.setText(translate("MainWindow", "Health Check..."))
+        self.actionHealthCheck.setToolTip(translate("MainWindow", "Look for problems with the installed mods"))
+        self.actionHealthCheck.setShortcut("F9")
         self.actionSelect_All_Mods.setText(translate("MainWindow", "Select All Mods"))
         self.actionSelect_All_Mods.setShortcut("Ctrl+A")
         self.actionEnableAll.setText(translate("MainWindow", "Enable All"))
