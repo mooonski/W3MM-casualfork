@@ -71,6 +71,7 @@ class LaunchTests(unittest.TestCase):
             mergerlaunchcommand=None,
         )
         self.widget = Mock()
+        self.widget.scriptMergerRunning.return_value = False
         self.config_patch = patch('src.gui.main_widget.data.config', self.config)
         self.config_patch.start()
         self.addCleanup(self.config_patch.stop)

@@ -261,6 +261,7 @@ class HandlerTests(unittest.TestCase):
         config_patch.start()
         self.addCleanup(config_patch.stop)
         self.widget = Mock()
+        self.widget.scriptMergerRunning.return_value = False
 
     def outputs(self):
         return "\n".join(str(call.args[0]) for call in self.widget.output.call_args_list)
@@ -381,3 +382,74 @@ class HandlerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ToolbarButtonTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self.config = SimpleNamespace(scriptmerger="C:/SM/WitcherScriptMerger.exe", mods="C:/Game/Mods")
+        config_patch = patch("src.gui.main_widget.data.config", self.config)
+        config_patch.start()
+        self.addCleanup(config_patch.stop)
+        self.widget = Mock()
+
+    def outputs(self):
+        return "\n".join(str(call.args[0]) for call in self.widget.output.call_args_list)
+
+    def test_a_second_copy_is_not_started(self):
+        self.widget.scriptMergerRunning.return_value = True
+        with patch("src.gui.main_widget.subprocess.Popen") as popen:
+            CustomMainWidget.runScriptMerger(self.widget)
+        popen.assert_not_called()
+        self.assertIn("already open", self.outputs())
+
+    def test_the_started_program_is_watched(self):
+        self.widget.scriptMergerRunning.return_value = False
+        with patch("src.gui.main_widget.platform", "win32"), patch("src.gui.main_widget.subprocess.Popen") as popen:
+            CustomMainWidget.runScriptMerger(self.widget)
+        self.widget.watchScriptMerger.assert_called_once_with(popen.return_value)
+
+    def test_closing_is_noticed_once_and_reported(self):
+        process = Mock()
+        process.poll.side_effect = [None, None, 0]  # running, running, closed
+        widget = SimpleNamespace(output=Mock(), scriptMergerClosed=Mock())
+        widget.scriptMergerRunning = lambda: CustomMainWidget.scriptMergerRunning(widget)
+        widget.checkScriptMergerClosed = lambda: CustomMainWidget.checkScriptMergerClosed(widget)
+        with patch("src.gui.main_widget.QTimer") as timer:
+            CustomMainWidget.watchScriptMerger(widget, process)
+        timer.return_value.start.assert_called_once()
+        self.assertIs(widget.scriptMergerProcess, process)
+        self.assertIn("checked here when you close it", widget.output.call_args.args[0])
+
+        widget.checkScriptMergerClosed()  # still open
+        widget.scriptMergerClosed.assert_not_called()
+        widget.checkScriptMergerClosed()  # still open
+        widget.checkScriptMergerClosed()  # closed
+        widget.scriptMergerClosed.assert_called_once()
+        timer.return_value.stop.assert_called_once()
+        self.assertIsNone(widget.scriptMergerProcess)
+        self.assertFalse(CustomMainWidget.scriptMergerRunning(widget))
+
+    def test_results_after_closing(self):
+        merged = ScriptConflict("a.ws", ["modA", "modB"], MERGED)
+        pending = ScriptConflict("b.ws", ["modA", "modB"], OUTDATED)
+        cases = [
+            (ConflictReport([], True), "Script Merger closed. No scripts conflict."),
+            (ConflictReport([merged], True), "Script Merger closed. All 1 script conflict merged."),
+            (ConflictReport([merged, pending], True), "Script Merger closed. 1 script file still needs merging"),
+        ]
+        for report, text in cases:
+            self.widget.scriptConflictReport.return_value = report
+            CustomMainWidget.scriptMergerClosed(self.widget)
+            self.assertIn(text, self.widget.output.call_args.args[0])
+        self.assertEqual(self.widget.refreshLoadOrder.call_count, 3)
+
+    def test_icon(self):
+        widget = SimpleNamespace(style=lambda: QApplication.style())
+        self.config.scriptmerger = sys.executable
+        self.assertFalse(CustomMainWidget.scriptMergerIcon(widget).isNull())
+        self.config.scriptmerger = ""
+        self.assertFalse(CustomMainWidget.scriptMergerIcon(widget).isNull())

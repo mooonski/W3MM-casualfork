@@ -165,6 +165,9 @@ class MainWindowLayoutTests(LayoutTestCase):
 
     def checkMainWindow(self, window, widget) -> None:
         self.assertEqual([widget.tabs.tabText(i) for i in range(widget.tabs.count())], ["Installed", "Browse Nexus"])
+        actions = widget.toolBar.actions()
+        self.assertEqual(actions.index(widget.actionRun_Script_Merger), actions.index(widget.actionCheckUpdates) + 1)
+        self.assertEqual(widget.actionRun_Script_Merger.iconText(), "Script Merger")
         labels = [widget.treeWidget.headerItem().text(i) for i in range(widget.treeWidget.columnCount())]
         self.assertEqual(len(labels), 15)
         self.assertTrue(all(labels[1:]), labels)

@@ -18,6 +18,7 @@ from PySide6.QtCore import (
     QSize,
     Qt,
     QThread,
+    QTimer,
     Signal,
 )
 from PySide6.QtGui import QAction, QActionGroup, QBrush, QCursor, QKeyEvent, QResizeEvent
@@ -481,6 +482,8 @@ class CustomMainWidget(QWidget):
         self.toolBar.addAction(self.actionUninstall_Mods)
         self.toolBar.addAction(self.actionEnable_Disable_Mods)
         self.toolBar.addAction(self.actionCheckUpdates)
+        self.actionRun_Script_Merger.setIcon(self.scriptMergerIcon())
+        self.toolBar.addAction(self.actionRun_Script_Merger)
         self.toolBar.setIconSize(QSize(32, 32))
         self.toolBar.addSeparator()
 
@@ -548,6 +551,7 @@ class CustomMainWidget(QWidget):
 
         self.toolBar.addSeparator()
 
+        self.builtInToolbarActions = len(self.toolBar.actions())
         for custom in data.getConfig().getOptions("TOOLBAR"):
             self.addToToolbar(custom)
         self.actionAddToToolbar = QAction(self.mainWindow)
@@ -590,7 +594,7 @@ class CustomMainWidget(QWidget):
         menu.addAction(self.actionAddToToolbar)
         rem = QMenu(menu)
         rem.setTitle(translate("MainWindow", "Remove.."))
-        actions = self.toolBar.actions()[15:]
+        actions = self.toolBar.actions()[self.builtInToolbarActions :]
         for action in actions:
             temp = self.makeTempAction(action)
             rem.addAction(temp)
@@ -1092,19 +1096,89 @@ class CustomMainWidget(QWidget):
                 scriptmergerpath = data.getConfig().scriptmerger
             if not scriptmergerpath:
                 return
+            if self.scriptMergerRunning():
+                self.output(translate("MainWindow", "Script Merger is already open."))
+                return
             directory, _ = path.split(scriptmergerpath)
             if platform == "win32" or platform == "cygwin":
-                subprocess.Popen([scriptmergerpath], cwd=directory)
+                process = subprocess.Popen([scriptmergerpath], cwd=directory)
             elif platform == "linux" or platform == "darwin":
                 command = data.getConfig().mergerlaunchcommand
                 if command:
-                    subprocess.Popen(command, cwd=directory, shell=True)
+                    process = subprocess.Popen(command, cwd=directory, shell=True)
                 else:
-                    subprocess.Popen(["wine", scriptmergerpath], cwd=directory)
+                    process = subprocess.Popen(["wine", scriptmergerpath], cwd=directory)
             else:
                 MessageUnsupportedOSAction("")
+                return
+            self.watchScriptMerger(process)
         except Exception as err:
             self.output(formatUserError(err))
+
+    def scriptMergerIcon(self):
+        '''Script Merger's own icon when it can be found, otherwise a generic one'''
+        executable = data.getConfig().scriptmerger
+        if executable and path.isfile(executable):
+            icon = QFileIconProvider().icon(QFileInfo(executable))
+            if not icon.isNull():
+                return icon
+        return self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
+
+    def scriptMergerRunning(self) -> bool:
+        process = getattr(self, "scriptMergerProcess", None)
+        return process is not None and process.poll() is None
+
+    def watchScriptMerger(self, process) -> None:
+        '''Checks every second whether Script Merger has closed, then reports what still needs merging'''
+        self.scriptMergerProcess = process
+        timer = getattr(self, "scriptMergerTimer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setInterval(1000)
+            timer.timeout.connect(self.checkScriptMergerClosed)
+            self.scriptMergerTimer = timer
+        timer.start()
+        self.output(translate("MainWindow", "Script Merger is open. Its results are checked here when you close it."))
+
+    def checkScriptMergerClosed(self) -> None:
+        if self.scriptMergerRunning():
+            return
+        self.scriptMergerTimer.stop()
+        self.scriptMergerProcess = None
+        self.scriptMergerClosed()
+
+    def scriptMergerClosed(self) -> None:
+        self.refreshLoadOrder()
+        report = self.scriptConflictReport()
+        if report is None:
+            return
+        pending = report.pending
+        if not report.conflicts:
+            self.output("> " + translate("MainWindow", "Script Merger closed. No scripts conflict."))
+        elif not pending:
+            self.output(
+                "> "
+                + translate("MainWindow", "Script Merger closed. All")
+                + " "
+                + plural(len(report.conflicts), translate("MainWindow", "script conflict"))
+                + " "
+                + translate("MainWindow", "merged.")
+            )
+        else:
+            self.output(
+                "> "
+                + translate("MainWindow", "Script Merger closed.")
+                + " "
+                + plural(len(pending), translate("MainWindow", "script file"))
+                + " "
+                + (
+                    translate("MainWindow", "still needs")
+                    if len(pending) == 1
+                    else translate("MainWindow", "still need")
+                )
+                + " "
+                + translate("MainWindow", "merging (Mods > Script Conflicts).")
+            )
 
     def selectAllMods(self):
         '''Selects all mods in the list'''
@@ -2733,6 +2807,8 @@ class CustomMainWidget(QWidget):
         self.actionRun_The_Game.setShortcut("Ctrl+R")
         self.actionRun_Script_Merger.setText(translate("MainWindow", "Run Script Merger"))
         self.actionRun_Script_Merger.setShortcut("Ctrl+S")
+        self.actionRun_Script_Merger.setIconText(translate("MainWindow", "Script Merger"))
+        self.actionRun_Script_Merger.setToolTip(translate("MainWindow", "Run Script Merger (Ctrl+S)"))
         self.actionAbout.setText(translate("MainWindow", "About"))
         self.actionAbout.setShortcut("F1")
         self.actionMain_Web_Page.setText(translate("MainWindow", "Main Web Page"))
