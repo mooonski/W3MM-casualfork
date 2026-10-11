@@ -5,6 +5,7 @@ import shlex
 import shutil
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from os import path
 from sys import platform
 
@@ -66,7 +67,7 @@ from src.core.groups import (
 )
 from src.core.health import ERROR, INFO, WARNING, Issue, checkHealth
 from src.core.history import FAILED as DOWNLOAD_FAILED
-from src.core.history import INSTALLED, KEPT, LINK, UPDATE, UPDATED, WEBSITE, Download, DownloadHistory
+from src.core.history import INSTALLED, KEPT, LINK, REINSTALL, UPDATE, UPDATED, WEBSITE, Download, DownloadHistory
 from src.core.installer import Installer
 from src.core.loadorder import moveFolder, prioritiesFor
 from src.core.model import Model
@@ -477,6 +478,7 @@ class CustomMainWidget(QWidget):
         self.actionInstall_Mods.triggered.connect(self.installMods)
         self.actionUninstall_Mods.triggered.connect(self.uninstallMods)
         self.actionReinstall_Mods.triggered.connect(self.reinstallMods)
+        self.actionReinstallFiles.triggered.connect(self.reinstallFromArchives)
         self.actionAbout.triggered.connect(showAboutWindow)
         self.actionEnable_Disable_Mods.triggered.connect(self.enableDisableMods)
         self.actionRefresh_Mod_List.triggered.connect(lambda e: self.refreshList())
@@ -692,6 +694,7 @@ class CustomMainWidget(QWidget):
         menu.addSeparator()
         menu.addMenu(self.moveToGroupMenu(menu))
         menu.addAction(self.actionRename)
+        menu.addAction(self.actionReinstallFiles)
         menu.addAction(self.actionReinstall_Mods)
         menu.addAction(self.actionUninstall_Mods)
         menu.addAction(self.actionEnable_Disable_Mods)
@@ -1138,6 +1141,177 @@ class CustomMainWidget(QWidget):
         except Exception as err:
             self.setProgress(0)
             self.output(formatUserError(err))
+
+    def modArchive(self, mod: Mod) -> str:
+        """The archive a mod was installed from, if it's still around: the one its entry names in the archive
+        folder, or the newest download of the same Nexus file that is still there"""
+        if mod.nexus and mod.nexus.archive:
+            candidate = path.join(data.getConfig().archives, path.basename(mod.nexus.archive))
+            if path.isfile(candidate) and path.getsize(candidate) > 0:
+                return candidate
+        for entry in self.downloadHistory.entries:
+            sameFile = (
+                mod.nexus and entry.modId == mod.nexus.modId and entry.fileId and entry.fileId == mod.nexus.fileId
+            )
+            if (sameFile or entry.mod == mod.name) and entry.archiveExists and path.getsize(entry.archive) > 0:
+                return entry.archive
+        return ""
+
+    def reinstallFromArchives(self) -> None:
+        """Installs the selected mods again from their archives, downloading the same Nexus file when the archive
+        is gone. Works like an update: each mod is backed up first and keeps its priority, enabled state, separator
+        and settings."""
+        names = [name for name in self.getSelectedMods() if name in self.model.modList]
+        if not names or self.nexusBusy():
+            return
+        local, downloads, impossible = [], [], []
+        for name in names:
+            mod = self.model.modList[name]
+            archive = self.modArchive(mod)
+            if archive:
+                local.append((name, archive))
+            elif mod.nexus and mod.nexus.modId and mod.nexus.fileId:
+                downloads.append(name)
+            else:
+                impossible.append(name)
+        for name in impossible:
+            self.output(
+                f"{name}: "
+                + translate("MainWindow", "its archive isn't in")
+                + f" {data.getConfig().archives} "
+                + translate("MainWindow", "and the Nexus file isn't known. Drag its archive onto the window instead.")
+            )
+        if not local and not downloads:
+            return
+        text = (
+            translate("MainWindow", "Reinstall")
+            + f" {plural(len(local) + len(downloads), translate('MainWindow', 'mod'))}?\n\n"
+            + translate(
+                "MainWindow",
+                "Each one is backed up first, then installed again from its archive. Its priority, enabled state, "
+                "separator and in-game settings are kept.",
+            )
+        )
+        if downloads:
+            text += (
+                "\n\n"
+                + translate("MainWindow", "These are downloaded from Nexus again first:")
+                + "\n"
+                + "\n".join(downloads)
+            )
+        answer = QMessageBox.question(
+            self,
+            translate("MainWindow", "Reinstall"),
+            text,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        if not downloads:
+            self.reinstallArchives(local)
+            return
+        client = self.nexusClient()
+        if client is None:
+            return
+        archives = data.getConfig().archives
+        wanted = [(name, self.model.modList[name].nexus) for name in downloads]
+
+        def work(progress):
+            results = []
+            for index, (name, nexus) in enumerate(wanted):
+                try:
+                    file = client.modFiles(nexus.modId).files.get(nexus.fileId)
+                    if file is None:
+                        raise NexusError(translate("MainWindow", "that file is no longer on Nexus"))
+                    url = client.downloadLinks(nexus.modId, file.fileId)[0]
+                    archive = client.download(
+                        url, archives, file.fileName or f"{nexus.modId}-{file.fileId}.zip", file.size
+                    )
+                    results.append((name, archive, ""))
+                except NexusError as error:
+                    if error.status in (401, 429):
+                        raise
+                    results.append((name, "", str(error)))
+                progress(index + 1, len(wanted))
+            return results
+
+        self.output(
+            translate("MainWindow", "Downloading")
+            + " "
+            + plural(len(wanted), "mod")
+            + " "
+            + translate("MainWindow", "from Nexus again...")
+        )
+        self.runNexus(work, lambda results: self.reinstallDownloaded(local, results))
+
+    def reinstallDownloaded(self, local: list, results: list) -> None:
+        jobs = list(local)
+        for name, archive, error in results:
+            mod = self.model.modList.get(name)
+            nexus = mod.nexus if mod is not None else None
+            self.downloadHistory.add(
+                Download(
+                    0,
+                    nexus.modId if nexus else 0,
+                    nexus.fileId if nexus else 0,
+                    nexus.fileName if nexus else name,
+                    nexus.version if nexus else "",
+                    archive,
+                    REINSTALL,
+                    DOWNLOAD_FAILED if error else KEPT,
+                    error,
+                    name,
+                )
+            )
+            if error:
+                self.output(f"{name}: {error}")
+            else:
+                jobs.append((name, archive))
+        self.reinstallArchives(jobs)
+
+    def reinstallArchives(self, jobs: list) -> None:
+        """Installs each (mod name, archive) into the mod's own entry, the way an update does"""
+        if not jobs:
+            return
+        updater = ModUpdater(self.model, output=self.output)
+        done = failed = incomplete = 0
+        for index, (name, archive) in enumerate(jobs):
+            mod = self.model.modList.get(name)
+            if mod is None:
+                continue
+            self.output(
+                translate("MainWindow", "Reinstalling")
+                + f" {name} "
+                + translate("MainWindow", "from")
+                + f" {path.basename(archive)}"
+            )
+            updater.progress = lambda p, i=index: self.setProgress(100 * (i + p) / len(jobs))
+            nexus = replace(mod.nexus, archive=path.basename(archive)) if mod.nexus else None
+            result = updater.update(mod, archive, nexus, reason="reinstall")
+            if result.success:
+                done += 1
+                for entry in self.downloadHistory.entries:
+                    if entry.archive == archive and entry.source == REINSTALL and entry.mod == name:
+                        self.downloadHistory.finish(entry, INSTALLED)
+                        break
+            else:
+                failed += 1
+            if result.incomplete:
+                incomplete += 1
+        self.setProgress(0)
+        self.refreshList()
+        self.output(
+            "> "
+            + translate("MainWindow", "Reinstalled")
+            + " "
+            + plural(done, translate("MainWindow", "mod"))
+            + (f" ({plural(failed, translate('MainWindow', 'error'))})" if failed else "")
+        )
+        if incomplete:
+            MessageAlertIncompleteInstallation()
+        if done:
+            self.alertRunScriptMerger()
 
     def reinstallMods(self):
         '''Reinstalls selected mods'''
@@ -3182,6 +3356,9 @@ class CustomMainWidget(QWidget):
         self.actionReinstall_Mods = QAction(self.mainWindow)
         self.actionReinstall_Mods.setObjectName("actionReinstall_Mods")
 
+        self.actionReinstallFiles = QAction(self.mainWindow)
+        self.actionReinstallFiles.setObjectName("actionReinstallFiles")
+
         self.actionRefresh_Mod_List = QAction(self.mainWindow)
         self.actionRefresh_Mod_List.setObjectName("actionRefresh_Mod_List")
 
@@ -3411,6 +3588,7 @@ class CustomMainWidget(QWidget):
         self.menuFile.addSeparator()
         self.menuFile.addAction(self.actionOpenFolder)
         self.menuFile.addSeparator()
+        self.menuFile.addAction(self.actionReinstallFiles)
         self.menuFile.addAction(self.actionReinstall_Mods)
         self.menuFile.addAction(self.actionRefresh_Mod_List)
         self.menuFile.addAction(self.actionRefresh_Load_Order)
@@ -3532,6 +3710,13 @@ class CustomMainWidget(QWidget):
         self.actionEnable_Disable_Mods.setShortcut("Ctrl+Q")
         self.actionRefresh_Mod_List.setText(translate("MainWindow", "Refresh Mod List"))
         self.actionRefresh_Mod_List.setShortcut("F5")
+        self.actionReinstallFiles.setText(translate("MainWindow", "Reinstall"))
+        self.actionReinstallFiles.setToolTip(
+            translate(
+                "MainWindow",
+                "Install the selected mods again from their archives, or download the same file from Nexus again",
+            )
+        )
         self.actionReinstall_Mods.setText(translate("MainWindow", "Restore Settings"))
         self.actionReinstall_Mods.setToolTip(
             translate("MainWindow", "Restore stored mod settings and key bindings to their defaults")

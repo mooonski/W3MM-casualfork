@@ -18,6 +18,7 @@ WEBSITE = 'website'  # sent to the website to download there
 # where it came from
 UPDATE = 'update'
 LINK = 'link'
+REINSTALL = 'reinstall'
 
 MAX_ENTRIES = 1000
 
