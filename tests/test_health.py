@@ -131,7 +131,9 @@ class HealthGuiTests(unittest.TestCase):
         with patch("src.gui.main_widget.data.config", config), patch("src.gui.main_widget.checkHealth") as check:
             check.return_value = [Issue(INFO, "", "Note"), Issue(WARNING, "A", "W"), Issue(ERROR, "B", "E")]
             self.assertEqual(len(CustomMainWidget.healthIssues(widget)), 3)
-            check.assert_called_once_with(widget.model, config, widget.scriptConflictReport.return_value)
+            check.assert_called_once_with(
+                widget.model, config, widget.scriptConflictReport.return_value, widget.nexusDetails.get
+            )
             check.side_effect = OSError("denied")
             self.assertEqual(CustomMainWidget.healthIssues(widget), [])
         self.assertIn("denied", widget.output.call_args.args[0])

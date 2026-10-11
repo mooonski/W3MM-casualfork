@@ -462,6 +462,9 @@ class Configuration:
         hsplit = ui.horizontalSplitter_tree.sizes()
         self.set('WINDOW', 'hsplit0', str(hsplit[0]))
         self.set('WINDOW', 'hsplit1', str(hsplit[1]))
+        vsplit = ui.verticalSplitter_right.sizes()
+        self.set('WINDOW', 'vsplit0', str(vsplit[0]))
+        self.set('WINDOW', 'vsplit1', str(vsplit[1]))
 
     def setDefaultWindow(self):
         self.set('WINDOW', 'width', '1024')
@@ -480,6 +483,7 @@ class Configuration:
         self.set('WINDOW', 'section11', '120')
         self.set('WINDOW', 'section12', '70')
         self.set('WINDOW', 'section13', '90')
+        self.set('WINDOW', 'section14', '110')
 
     @staticmethod
     def getGameRoot(gamePath: str) -> str:

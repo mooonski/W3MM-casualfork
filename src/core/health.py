@@ -2,11 +2,14 @@
 
 import os
 import re
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from os import path
 
 from src.core.duplicates import duplicateEntries
 from src.core.model import Model
+from src.core.nexusdetails import ModDetails
 from src.core.scriptmerger import MERGED_FOLDER, ConflictReport
 from src.domain.mod import Mod
 
@@ -25,9 +28,28 @@ class Issue:
     url: str = ''
 
 
-def checkHealth(model: Model, config, scripts: ConflictReport | None = None) -> list[Issue]:
-    '''Looks for problems in the installed mods. Only reads files.'''
+def checkHealth(
+    model: Model,
+    config,
+    scripts: ConflictReport | None = None,
+    details: Callable[[int], ModDetails | None] | None = None,
+) -> list[Issue]:
+    '''Looks for problems in the installed mods. Only reads files (and already loaded Nexus details).'''
     issues: list[Issue] = []
+    if details is not None and getattr(config, "gameversion", "") == "re":
+        for mod in model.all():
+            known = details(mod.nexus.modId) if mod.nexus and mod.nexus.modId else None
+            if known is not None and not known.updatedForRemastered:
+                updated = time.strftime("%Y-%m-%d", time.gmtime(known.updated))
+                issues.append(
+                    Issue(
+                        WARNING,
+                        mod.name,
+                        "Not updated since Remastered",
+                        f"Last updated on Nexus {updated} (Nexus > Check Remastered Versions looks for other versions)",
+                        known.url,
+                    )
+                )
     mods = config.mods or ''
     dlc = config.dlc or ''
     menu = config.menu or ''

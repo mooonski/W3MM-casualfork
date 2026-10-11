@@ -3,6 +3,7 @@
 import os
 import shlex
 import shutil
+import time
 from collections.abc import Callable
 from os import path
 from sys import platform
@@ -48,7 +49,7 @@ from watchdog.observers import Observer
 
 from src.core.duplicates import duplicateEntries, matchingEntries, versionNote
 from src.core.fetcher import isArchive
-from src.core.health import ERROR, WARNING, checkHealth
+from src.core.health import ERROR, INFO, WARNING, Issue, checkHealth
 from src.core.installer import Installer
 from src.core.model import Model
 from src.core.nexus import (
@@ -66,6 +67,7 @@ from src.core.nexus import (
     parseModReference,
     uniquePath,
 )
+from src.core.nexusdetails import DetailsCache, NexusGraphQL, remasteredSuggestions
 from src.core.nxm import NxmLink, NxmRegistration, WindowsRegistry, forward, parseNxm
 from src.core.rmmr import RmmrError, applyImport, isRmmrFolder, planImport
 from src.core.scriptmerger import ConflictReport, analyse, findScriptMerger, installedVersion, isNewer, nexusId
@@ -79,6 +81,7 @@ from src.gui.alerts import (
 )
 from src.gui.details_dialog import DetailsDialog
 from src.gui.health_dialog import HealthDialog
+from src.gui.mod_preview import ModPreview
 from src.gui.nexus_dialogs import (
     BackupsDialog,
     NexusWorker,
@@ -137,6 +140,8 @@ class CustomMainWidget(QWidget):
         self.updateChecks: dict[str, UpdateCheck] = {}
         self.nexusWorker: NexusWorker | None = None
         self.nxmQueue: list[str] = []
+        self.nexusDetails = DetailsCache(data.getConfig().configuration)
+        self.detailsWorker: NexusWorker | None = None
 
         self.modsSettingsWatcher = ModsSettingsWatcher()
         # connect to a method so the refresh always runs on the GUI thread
@@ -166,6 +171,7 @@ class CustomMainWidget(QWidget):
         self.reportDuplicates()
         self.detectScriptMerger()
         self.reportHealth()
+        self.refreshNexusDetails(silent=True, onlyMissing=True)
 
         QMetaObject.connectSlotsByName(self.mainWindow)
 
@@ -300,7 +306,15 @@ class CustomMainWidget(QWidget):
         self.loadOrder.setSortingEnabled(False)
 
         # Configure splitter
-        self.horizontalSplitter_tree.addWidget(self.loadOrder)
+        # the preview of the selected mod sits above the load order
+        self.preview = ModPreview(self.centralwidget)
+        self.verticalSplitter_right = QSplitter(Qt.Orientation.Vertical)
+        self.verticalSplitter_right.setObjectName("verticalSplitter_right")
+        self.verticalSplitter_right.addWidget(self.preview)
+        self.verticalSplitter_right.addWidget(self.loadOrder)
+        self.verticalSplitter_right.setStretchFactor(0, 1)
+        self.verticalSplitter_right.setStretchFactor(1, 1)
+        self.horizontalSplitter_tree.addWidget(self.verticalSplitter_right)
         self.horizontalSplitter_tree.setCollapsible(0, False)
         self.horizontalSplitter_tree.setCollapsible(1, True)
         self.horizontalSplitter_tree.setStretchFactor(0, 3)
@@ -405,6 +419,8 @@ class CustomMainWidget(QWidget):
         self.actionOpenNexusPage.triggered.connect(self.openNexusPage)
         self.actionRestoreBackup.triggered.connect(self.restoreBackup)
         self.actionImportRmmr.triggered.connect(self.importFromRmmr)
+        self.actionRefreshDetails.triggered.connect(lambda: self.refreshNexusDetails())
+        self.actionCheckRemastered.triggered.connect(self.checkRemastered)
         self.actionKeepArchives.triggered.connect(self.keepArchivesChanged)
         self.actionHandleNxm.triggered.connect(self.handleNxmChanged)
         self.actionSetApiKey.triggered.connect(lambda: askApiKey(self))
@@ -426,6 +442,7 @@ class CustomMainWidget(QWidget):
         self.treeWidget.itemChanged.connect(self.modToggled)
         self.treeWidget.installEventFilter(self)
         self.treeWidget.itemDoubleClicked.connect(self.modDoubleClicked)
+        self.treeWidget.itemSelectionChanged.connect(self.updatePreview)
         self.treeWidget.header().setStretchLastSection(False)
 
         self.loadOrder.itemDoubleClicked.connect(self.loadOrderDoubleClicked)
@@ -605,6 +622,9 @@ class CustomMainWidget(QWidget):
             hsplit1 = data.getConfig().get("WINDOW", "hsplit1")
             if hsplit0 and hsplit1:
                 self.horizontalSplitter_tree.setSizes([int(hsplit0), int(hsplit1)])
+            vsplit0 = data.getConfig().get("WINDOW", "vsplit0")
+            vsplit1 = data.getConfig().get("WINDOW", "vsplit1")
+            self.verticalSplitter_right.setSizes([int(vsplit0), int(vsplit1)] if vsplit0 and vsplit1 else [420, 260])
         except Exception as e:
             print(f"couldn't restore split: {e}")
 
@@ -1437,6 +1457,7 @@ class CustomMainWidget(QWidget):
             self.updateChecks.pop(name, None)
         self.model.write()
         self.refreshList()
+        self.refreshNexusDetails(silent=True, onlyMissing=True)
 
     def openNexusPage(self) -> None:
         for name in self.getSelectedMods():
@@ -1700,6 +1721,146 @@ class CustomMainWidget(QWidget):
             self.model.write()
             self.refreshList()
 
+    # Nexus details: pictures, categories, summaries
+
+    def linkedModIds(self) -> list[int]:
+        return sorted({mod.nexus.modId for mod in self.model.all() if mod.nexus and mod.nexus.modId})
+
+    def modDetails(self, mod: Mod):
+        return self.nexusDetails.get(mod.nexus.modId) if mod.nexus and mod.nexus.modId else None
+
+    def modCategory(self, mod: Mod) -> str:
+        details = self.modDetails(mod)
+        return details.category if details else ""
+
+    def updatePreview(self) -> None:
+        selected = self.getSelectedMods()
+        mod = self.model.modList.get(selected[0]) if selected else None
+        details = self.modDetails(mod) if mod is not None else None
+        remastered = data.getConfig().gameversion == "re"
+        self.preview.showMod(mod, details, self.nexusDetails.image(details), remastered)
+
+    def refreshNexusDetails(self, silent: bool = False, onlyMissing: bool = False) -> None:
+        '''Fetches pictures, categories and summaries of the linked mods in the background'''
+        if self.detailsWorker is not None and self.detailsWorker.isRunning():
+            return
+        modIds = self.nexusDetails.missing(self.linkedModIds()) if onlyMissing else self.linkedModIds()
+        if not modIds:
+            if not silent:
+                self.output(translate("MainWindow", "No mods with a Nexus ID."))
+            return
+        cache = self.nexusDetails
+
+        def work(progress):
+            found = NexusGraphQL().details(modIds)
+            for index, details in enumerate(found.values()):
+                try:
+                    cache.downloadImage(details.thumbnailUrl)
+                except NexusError as error:
+                    print("could not download thumbnail:", error)
+                progress(index + 1, len(found))
+            return found
+
+        worker = NexusWorker(work, self)
+        worker.succeeded.connect(lambda found: self.detailsFetched(found, silent))
+        worker.failed.connect(
+            lambda message: None if silent else self.output(translate("MainWindow", "Nexus details:") + f" {message}")
+        )
+        self.detailsWorker = worker
+        if not silent:
+            self.output(translate("MainWindow", "Loading Nexus details for") + f" {len(modIds)} " + "mods...")
+        worker.start()
+
+    def detailsFetched(self, found: dict, silent: bool) -> None:
+        self.nexusDetails.update(found)
+        try:
+            self.nexusDetails.save()
+        except OSError as error:
+            self.output(translate("MainWindow", "Couldn't save Nexus details:") + f" {error}")
+        self.refreshList()
+        self.updatePreview()
+        if not silent:
+            self.output(translate("MainWindow", "Loaded Nexus details for") + f" {len(found)} " + "mods")
+
+    def checkRemastered(self) -> None:
+        '''Lists mods not updated on Nexus since Remastered came out, with other versions that were'''
+        if self.detailsWorker is not None and self.detailsWorker.isRunning():
+            self.output(translate("MainWindow", "Still loading Nexus details..."))
+            return
+        mods = {mod.nexus.modId: mod for mod in self.model.all() if mod.nexus and mod.nexus.modId}
+        if not mods:
+            self.output(translate("MainWindow", "No mods with a Nexus ID to check."))
+            return
+
+        def work(progress):
+            graphql = NexusGraphQL()
+            found = graphql.details(list(mods))
+            outdated = [details for details in found.values() if not details.updatedForRemastered]
+            suggestions = {}
+            for index, details in enumerate(outdated):
+                suggestions[details.modId] = remasteredSuggestions(graphql, details.name, details.modId)
+                progress(index + 1, len(outdated))
+            return found, suggestions
+
+        worker = NexusWorker(work, self)
+        worker.progressed.connect(lambda current, total: self.setProgress(100 * current / total if total else 0))
+        worker.succeeded.connect(lambda result: self.remasteredChecked(mods, *result))
+        worker.failed.connect(lambda message: self.output(message))
+        worker.finished.connect(lambda: self.setProgress(0))
+        self.detailsWorker = worker
+        self.output(
+            translate("MainWindow", "Checking") + f" {len(mods)} " + translate("MainWindow", "mods for Remastered...")
+        )
+        worker.start()
+
+    def remasteredChecked(self, mods: dict, found: dict, suggestions: dict) -> None:
+        self.detailsFetched(found, True)
+        issues = []
+        for modId, details in sorted(found.items(), key=lambda item: item[1].name.lower()):
+            if details.updatedForRemastered:
+                continue
+            mod = mods.get(modId)
+            updated = time.strftime("%Y-%m-%d", time.gmtime(details.updated))
+            others = suggestions.get(modId) or []
+            detail = translate("MainWindow", "Last updated on Nexus") + f" {updated}."
+            if others:
+                detail += (
+                    " "
+                    + translate("MainWindow", "Possible Remastered versions:")
+                    + " "
+                    + "; ".join(f"{other.name} ({other.modId})" for other in others)
+                )
+            else:
+                detail += " " + translate("MainWindow", "No other version updated for Remastered was found.")
+            issues.append(
+                Issue(
+                    WARNING,
+                    mod.name if mod else details.name,
+                    translate("MainWindow", "Not updated since Remastered"),
+                    detail,
+                    others[0].url if others else details.url,
+                )
+            )
+        missing = sorted(set(mods) - set(found))
+        for modId in missing:
+            issues.append(
+                Issue(
+                    INFO,
+                    mods[modId].name,
+                    translate("MainWindow", "Not found on Nexus"),
+                    translate("MainWindow", "The mod may be hidden or removed."),
+                    mods[modId].nexus.url,
+                )
+            )
+        self.output(
+            "> "
+            + f"{len([issue for issue in issues if issue.severity == WARNING])} "
+            + translate("MainWindow", "of")
+            + f" {len(mods)} "
+            + translate("MainWindow", "mods haven't been updated since Remastered")
+        )
+        HealthDialog(self, issues, title=translate("MainWindow", "Remastered Versions")).exec()
+
     def importFromRmmr(self) -> None:
         '''Adds mods and Nexus IDs from Relapse's Mod Manager Redux, after showing what will change'''
         folder = QFileDialog.getExistingDirectory(
@@ -1725,6 +1886,7 @@ class CustomMainWidget(QWidget):
         added, linked = applyImport(plan, self.model)
         self.refreshList()
         self.reportDuplicates()
+        self.refreshNexusDetails(silent=True, onlyMissing=True)
         self.output(
             "> "
             + translate("MainWindow", "Imported from RMMR:")
@@ -1800,6 +1962,7 @@ class CustomMainWidget(QWidget):
                     mod.date,
                     mod.nexus.version if mod.nexus else "",
                     statusText(self.updateChecks.get(mod.name)),
+                    self.modCategory(mod),
                 )
                 if mod.name in duplicates:
                     row.setForeground(1, QBrush(QColor("#e5a050")))
@@ -1881,6 +2044,7 @@ class CustomMainWidget(QWidget):
         date,
         version="",
         update="",
+        category="",
     ):
         '''Adds mod data to the list'''
         if data_ == 0:
@@ -1928,6 +2092,7 @@ class CustomMainWidget(QWidget):
             str(date),
             str(version),
             str(update),
+            str(category),
         ]
         item = CustomTreeWidgetItem(proplist)
         item.setTextAlignment(12, Qt.AlignmentFlag.AlignCenter)
@@ -2040,7 +2205,7 @@ class CustomMainWidget(QWidget):
 
     def healthIssues(self) -> list:
         try:
-            return checkHealth(self.model, data.getConfig(), self.scriptConflictReport())
+            return checkHealth(self.model, data.getConfig(), self.scriptConflictReport(), self.nexusDetails.get)
         except OSError as err:
             self.output(translate("MainWindow", "Couldn't run the health check:") + f" {err}")
             return []
@@ -2205,6 +2370,12 @@ class CustomMainWidget(QWidget):
         self.actionImportRmmr = QAction(self.mainWindow)
         self.actionImportRmmr.setObjectName("actionImportRmmr")
 
+        self.actionRefreshDetails = QAction(self.mainWindow)
+        self.actionRefreshDetails.setObjectName("actionRefreshDetails")
+
+        self.actionCheckRemastered = QAction(self.mainWindow)
+        self.actionCheckRemastered.setObjectName("actionCheckRemastered")
+
         self.actionKeepArchives = QAction(self.mainWindow)
         self.actionKeepArchives.setCheckable(True)
         self.actionKeepArchives.setObjectName("actionKeepArchives")
@@ -2333,6 +2504,9 @@ class CustomMainWidget(QWidget):
         self.menuNexus.addAction(self.actionRestoreBackup)
         self.menuNexus.addAction(self.actionImportRmmr)
         self.menuNexus.addSeparator()
+        self.menuNexus.addAction(self.actionRefreshDetails)
+        self.menuNexus.addAction(self.actionCheckRemastered)
+        self.menuNexus.addSeparator()
         self.menuNexus.addAction(self.actionSetApiKey)
         self.menuNexus.addAction(self.actionChangeArchiveFolder)
         self.menuNexus.addAction(self.actionKeepArchives)
@@ -2377,6 +2551,7 @@ class CustomMainWidget(QWidget):
         self.treeWidget.headerItem().setText(11, translate("MainWindow", "Date Installed"))
         self.treeWidget.headerItem().setText(12, translate("MainWindow", "Version"))
         self.treeWidget.headerItem().setText(13, translate("MainWindow", "Update"))
+        self.treeWidget.headerItem().setText(14, translate("MainWindow", "Category"))
 
         self.loadOrder.headerItem().setText(0, translate("MainWindow", "Load Order"))
         self.loadOrder.headerItem().setText(1, translate("MainWindow", "Priority"))
@@ -2466,6 +2641,14 @@ class CustomMainWidget(QWidget):
         self.actionOpenNexusPage.setShortcut("Ctrl+N")
         self.actionRestoreBackup.setText(translate("MainWindow", "Restore Previous Version..."))
         self.actionImportRmmr.setText(translate("MainWindow", "Import from RMMR..."))
+        self.actionRefreshDetails.setText(translate("MainWindow", "Refresh Nexus Details"))
+        self.actionRefreshDetails.setToolTip(
+            translate("MainWindow", "Load pictures, categories and summaries of linked mods")
+        )
+        self.actionCheckRemastered.setText(translate("MainWindow", "Check Remastered Versions..."))
+        self.actionCheckRemastered.setToolTip(
+            translate("MainWindow", "Find mods not updated since Remastered, and other versions that were")
+        )
         self.actionImportRmmr.setToolTip(
             translate("MainWindow", "Add mods and Nexus IDs from Relapse's Mod Manager Redux")
         )

@@ -25,9 +25,15 @@ SEVERITIES = {ERROR: ("Problem", "#e06c6c"), WARNING: ("Warning", "#e5a050"), IN
 class HealthDialog(QDialog):
     '''Lists problems found with the installed mods'''
 
-    def __init__(self, parent: QWidget | None, issues: list[Issue], refresh: Callable[[], list[Issue]] | None = None):
+    def __init__(
+        self,
+        parent: QWidget | None,
+        issues: list[Issue],
+        refresh: Callable[[], list[Issue]] | None = None,
+        title: str = "",
+    ):
         super().__init__(parent)
-        self.setWindowTitle(translate("Health", "Health Check"))
+        self.setWindowTitle(title or translate("Health", "Health Check"))
         self.resize(1100, 520)
         self.refreshIssues = refresh
         layout = QVBoxLayout(self)
