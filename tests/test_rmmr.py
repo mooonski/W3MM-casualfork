@@ -298,6 +298,21 @@ class PlanTests(unittest.TestCase):
         self.assertEqual((plan.count(ADD), plan.count(LINK), plan.count(SKIP)), (5, 1, 4))
         self.assertIsNone(items["No Id"].nexus)
 
+    def test_mods_that_only_change_ini_settings(self):
+        base = self.game / "bin/config/base"
+        base.mkdir(parents=True)
+        (base / "rendering.ini").write_text("[Rendering]\n")
+        ini = '<ini path="bin/config/base/rendering.ini" section="R" key="A">1</ini>'
+        gone = '<ini path="bin/config/base/missing.ini" section="R" key="A">1</ini>'
+        self.rmmr.write(
+            [entry("Wind", ini, enabled="False"), entry("Gone", gone)], {"Wind": meta(10486), "Gone": meta(2)}
+        )
+        items = self.items(planImport(str(self.rmmr.folder), self.model, []))
+        self.assertEqual(items["Wind"].action, ADD)
+        self.assertEqual(items["Wind"].mod.inis, ["rendering.ini"])
+        self.assertFalse(items["Wind"].mod.enabled)  # the ini can't tell, so RMMR's record is kept
+        self.assertEqual((items["Gone"].action, items["Gone"].reason), (SKIP, "Not installed in this game folder"))
+
     def test_existing_entry_without_nexus_id_in_rmmr(self):
         mod = Mod(files=["modA"])
         mod._name = "A"

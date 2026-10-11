@@ -345,6 +345,12 @@ def installedState(mod: Mod) -> tuple[bool, bool | None]:
             for filename, enabled in ((menu, True), (menu + ".disabled", False)):
                 if path.isfile(path.join(config.menu, filename)):
                     states.add(enabled)
+    if not states and not mod.files and not mod.dlcs and not mod.menus and mod.inis and config.game:
+        # a mod that only changes settings in the game's ini files is installed as long as those files exist;
+        # whether it's enabled can't be told from them, so RMMR's record is kept
+        base = path.join(config.game, "bin", "config", "base")
+        if any(path.isfile(path.join(base, ini)) for ini in mod.inis):
+            return True, None
     return bool(states), (states.pop() if len(states) == 1 else None)
 
 
