@@ -66,16 +66,24 @@ class ModPreview(QWidget):
             self.summary.setText('')
             self.link.setText('')
             return
-        self.title.setText(details.name if details and details.name else mod.name)
-        if details is None:
-            self.meta.setText('')
-            self.summary.setText(
-                translate("Preview", "Nexus details haven't been loaded yet (Nexus > Refresh Nexus Details).")
-                if mod.nexus and mod.nexus.modId
-                else translate("Preview", "Not linked to Nexus (Nexus > Set Nexus Mod...).")
-            )
-            self.link.setText(self.anchor(mod.nexus.url) if mod.nexus and mod.nexus.modId else '')
+        if details is not None:
+            self.showDetails(details, image, remastered)
             return
+        self.title.setText(mod.name)
+        self.meta.setText('')
+        self.summary.setText(
+            translate("Preview", "Nexus details haven't been loaded yet (Nexus > Refresh Nexus Details).")
+            if mod.nexus and mod.nexus.modId
+            else translate("Preview", "Not linked to Nexus (Nexus > Set Nexus Mod...).")
+        )
+        self.link.setText(self.anchor(mod.nexus.url) if mod.nexus and mod.nexus.modId else '')
+
+    def showDetails(self, details: ModDetails, image: str, remastered: bool = False) -> None:
+        '''Shows a mod from Nexus, installed or not'''
+        self.pixmap = QPixmap(image) if image else QPixmap()
+        self.updateImage()
+        self.warning.setText('')
+        self.title.setText(details.name)
         version = details.version if not details.version or details.version[:1] in 'vV' else 'v' + details.version
         updated = time.strftime('%Y-%m-%d', time.gmtime(details.updated)) if details.updated else ''
         parts = [

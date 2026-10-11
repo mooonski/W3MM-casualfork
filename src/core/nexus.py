@@ -444,7 +444,7 @@ class NexusClient:
         if expectedSize and os.path.isfile(existing) and os.path.getsize(existing) == expectedSize:
             return existing
         partial = uniquePath(directory, filename + '.part')
-        request = urllib.request.Request(url, headers={'User-Agent': f"{APP_NAME}/{VERSION}"})
+        request = urllib.request.Request(encodeUrl(url), headers={'User-Agent': f"{APP_NAME}/{VERSION}"})
         done = 0
         try:
             with self.opener(request, timeout=self.timeout) as response, open(partial, 'wb') as output:
@@ -485,6 +485,14 @@ class NexusClient:
                 os.remove(partial)
         except OSError:
             pass
+
+
+def encodeUrl(url: str) -> str:
+    '''Percent-encodes characters such as spaces that download links sometimes contain; encoded parts stay as they are'''
+    parts = urllib.parse.urlsplit(url)
+    path = urllib.parse.quote(parts.path, safe="/%:@!$&'()*+,;=-._~")
+    query = urllib.parse.quote(parts.query, safe="=&%/:@!$'()*+,;-._~?")
+    return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, query, parts.fragment))
 
 
 def safeFileName(name: str) -> str:

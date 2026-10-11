@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStyle,
+    QTabWidget,
     QTextEdit,
     QToolBar,
     QTreeWidget,
@@ -79,6 +80,7 @@ from src.gui.alerts import (
     MessageAlertIncompleteInstallation,
     MessageUnsupportedOSAction,
 )
+from src.gui.browse_widget import BrowseWidget
 from src.gui.details_dialog import DetailsDialog
 from src.gui.health_dialog import HealthDialog
 from src.gui.mod_preview import ModPreview
@@ -251,14 +253,29 @@ class CustomMainWidget(QWidget):
         self.verticalLayout_2 = QVBoxLayout(self.centralwidget)
         self.verticalLayout_2.setObjectName("verticalLayout_2")
 
+        # Tabs: the installed mods, and browsing Nexus
+        self.tabs = QTabWidget(self.centralwidget)
+        self.tabs.setObjectName("tabs")
+        self.installedTab = QWidget(self.tabs)
+        self.installedLayout = QVBoxLayout(self.installedTab)
+        self.installedLayout.setContentsMargins(0, 4, 0, 0)
+
         # Search widget
-        self.searchWidget = QLineEdit(self.centralwidget)
+        self.searchWidget = QLineEdit(self.installedTab)
         self.searchWidget.setObjectName("searchWidget")
         self.searchWidget.setPlaceholderText(translate("MainWindow", "Search"))
-        self.verticalLayout_2.addWidget(self.searchWidget)
+        self.installedLayout.addWidget(self.searchWidget)
 
         # Setup tree widget
         self.setupTreeWidget()
+        self.tabs.addTab(self.installedTab, translate("MainWindow", "Installed"))
+
+        self.browse = BrowseWidget(
+            self.tabs, self.nexusDetails, lambda: set(self.linkedModIds()), data.getConfig().gameversion == "re"
+        )
+        self.browse.installRequested.connect(self.installFromNexus)
+        self.tabs.addTab(self.browse, translate("MainWindow", "Browse Nexus"))
+        self.verticalLayout_2.addWidget(self.tabs)
 
         # Setup text output and buttons
         self.setupOutputArea()
@@ -319,7 +336,7 @@ class CustomMainWidget(QWidget):
         self.horizontalSplitter_tree.setCollapsible(1, True)
         self.horizontalSplitter_tree.setStretchFactor(0, 3)
         self.horizontalSplitter_tree.setStretchFactor(1, 1)
-        self.verticalLayout_2.addWidget(self.horizontalSplitter_tree)
+        self.installedLayout.addWidget(self.horizontalSplitter_tree)
 
     def setupOutputArea(self):
         '''Setup output text area and action buttons'''
@@ -1682,7 +1699,13 @@ class CustomMainWidget(QWidget):
             except NexusError as error:
                 if error.status in (401, 429):
                     raise
-            url = client.downloadLinks(link.modId, link.fileId, link.key, link.expires)[0]
+            try:
+                url = client.downloadLinks(link.modId, link.fileId, link.key, link.expires)[0]
+            except NexusError as error:
+                if error.status == 403 and not link.key:
+                    # a free account without a website link: the download has to start on the website
+                    return link, file, ''
+                raise
             name = file.fileName if file and file.fileName else f"{link.modId}-{link.fileId}.zip"
             archive = client.download(url, archives, name, file.size if file else 0, progress=progress)
             return link, file, archive
@@ -1690,8 +1713,47 @@ class CustomMainWidget(QWidget):
         self.output(translate("MainWindow", "Downloading from Nexus..."))
         self.runNexus(work, self.nxmDownloaded)
 
+    def installFromNexus(self, details) -> None:
+        '''Downloads and installs a mod picked in the Browse Nexus tab, asking which file if there are several'''
+        if self.nexusBusy():
+            return
+        client = self.nexusClient()
+        if client is None:
+            return
+
+        def work(progress):
+            return client.modFiles(details.modId)
+
+        self.runNexus(work, lambda files: self.chooseNexusFile(client, details, files))
+
+    def chooseNexusFile(self, client: NexusClient, details, files: ModFiles) -> None:
+        current = files.currentFiles()
+        if not current:
+            self.output(details.name + ": " + translate("MainWindow", "no files to download on Nexus"))
+            return
+        main = sorted(current, key=lambda file: (file.category != "MAIN", not file.primary, -file.uploaded))
+        chosen = main[0]
+        if len(main) > 1:
+            # the archive name keeps files with the same name and version apart
+            labels = [f"{file.label()}  ({file.fileName})" for file in main]
+            label, ok = QInputDialog.getItem(
+                self,
+                translate("MainWindow", "Download") + f" {details.name}",
+                translate("MainWindow", "Which file?"),
+                labels,
+                0,
+                False,
+            )
+            if not ok:
+                return
+            chosen = main[labels.index(label)]
+        self.downloadNxm(client, NxmLink(GAME_DOMAIN, details.modId, chosen.fileId))
+
     def nxmDownloaded(self, result: tuple[NxmLink, NexusFile | None, str]) -> None:
         link, file, archive = result
+        if not archive:
+            self.openNexusDownload(link.modId, link.fileId, file.name if file else str(link.modId))
+            return
         filename = path.basename(archive)
         self.output(translate("MainWindow", "Downloaded") + f" {filename}")
         self.raiseWindow()
@@ -1707,6 +1769,7 @@ class CustomMainWidget(QWidget):
             self.output(translate("MainWindow", "Kept in") + f" {path.dirname(archive)}")
             return
         self.installModFiles([archive])
+        self.browse.markInstalled()
         if file is None:
             return
         # the website said exactly which file this is, so remember it on the entry it was installed into
