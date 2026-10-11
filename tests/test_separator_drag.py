@@ -221,5 +221,46 @@ class HandlerTests(unittest.TestCase):
         self.assertEqual(self.widget.saveGroups.call_count, calls)
 
 
+class FoldAllTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_collapse_and_expand_every_separator(self):
+        widget = Mock()
+        widget.treeWidget = ModTree()
+        for rank, name in enumerate(("Visuals", "Combat", "")):
+            heading = GroupItem(name, rank)
+            widget.treeWidget.addTopLevelItem(heading)
+            heading.addChild(QTreeWidgetItem(["", f"mod {rank}"]))
+            heading.setExpanded(True)
+        folded = []
+        widget.treeWidget.itemCollapsed.connect(folded.append)
+        config = SimpleNamespace(collapsedgroups=["Combat"])
+        with patch("src.gui.main_widget.data.config", config):
+            CustomMainWidget.setAllFolded(widget, True)
+            self.assertEqual(config.collapsedgroups, ["Visuals", "Combat", ""])
+            self.assertFalse(any(h.isExpanded() for h in widget.treeWidget.headings()))
+            CustomMainWidget.setAllFolded(widget, False)
+            self.assertEqual(config.collapsedgroups, [])
+            self.assertTrue(all(h.isExpanded() for h in widget.treeWidget.headings()))
+        self.assertEqual(folded, [], "one save, not one per separator")
+
+    def test_menu_entries_only_with_separators(self):
+        from PySide6.QtWidgets import QMenu
+
+        widget = Mock()
+        widget.treeWidget = ModTree()
+        menu = QMenu()
+        CustomMainWidget.addFoldActions(widget, menu)
+        self.assertEqual(menu.actions(), [])
+        widget.treeWidget.addTopLevelItem(GroupItem("Visuals", 0))
+        CustomMainWidget.addFoldActions(widget, menu)
+        labels = [action.text() for action in menu.actions() if not action.isSeparator()]
+        self.assertEqual(labels, ["Collapse All Separators", "Expand All Separators"])
+        menu.actions()[1].trigger()
+        widget.setAllFolded.assert_called_once_with(True)
+
+
 if __name__ == "__main__":
     unittest.main()

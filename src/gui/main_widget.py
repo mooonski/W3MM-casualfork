@@ -670,6 +670,7 @@ class CustomMainWidget(QWidget):
         if clicked is None:
             menu.addAction(translate("MainWindow", "Add Separator"), self.addSeparator)
             menu.addAction(translate("MainWindow", "Sort by My Order"), self.sortByMyOrder)
+            self.addFoldActions(menu)
             menu.exec(self.treeWidget.viewport().mapToGlobal(position))
             return
         if isGroupItem(clicked):
@@ -2883,6 +2884,7 @@ class CustomMainWidget(QWidget):
         if not name:
             menu.addAction(translate("MainWindow", "Add Separator"), self.addSeparator)
             menu.addAction(translate("MainWindow", "Sort by My Order"), self.sortByMyOrder)
+            self.addFoldActions(menu)
             return
         order = orderedGroups(data.getConfig().groups, self.model.all())
         menu.addAction(translate("MainWindow", "Rename Separator..."), lambda: self.renameModGroup(name))
@@ -2893,6 +2895,7 @@ class CustomMainWidget(QWidget):
         menu.addSeparator()
         menu.addAction(translate("MainWindow", "Add Separator"), self.addSeparator)
         menu.addAction(translate("MainWindow", "Sort by My Order"), self.sortByMyOrder)
+        self.addFoldActions(menu)
         menu.addAction(translate("MainWindow", "Remove Separator (keeps its mods)"), lambda: self.removeModGroup(name))
 
     def askGroupName(self, title: str, current: str = "") -> str:
@@ -2928,6 +2931,25 @@ class CustomMainWidget(QWidget):
                 mod.listorder = index + 1
         data.getConfig().listsort = "custom"
         self.saveGroups(orderedGroups(data.getConfig().groups, self.model.all()))
+
+    def addFoldActions(self, menu: QMenu) -> None:
+        """Collapse All / Expand All Separators, while the list has separators"""
+        if not self.treeWidget.headings():
+            return
+        menu.addSeparator()
+        menu.addAction(translate("MainWindow", "Collapse All Separators"), lambda: self.setAllFolded(True))
+        menu.addAction(translate("MainWindow", "Expand All Separators"), lambda: self.setAllFolded(False))
+
+    def setAllFolded(self, folded: bool) -> None:
+        """Folds (or unfolds) every separator in the mod list, and remembers it"""
+        headings = self.treeWidget.headings()
+        self.treeWidget.blockSignals(True)
+        try:
+            for heading in headings:
+                heading.setExpanded(not folded)
+        finally:
+            self.treeWidget.blockSignals(False)
+        data.getConfig().collapsedgroups = [heading.data(0, GROUP_ROLE) for heading in headings] if folded else []
 
     def sortByMyOrder(self) -> None:
         """Shows the mod list in the order the mods were dragged into, instead of sorted by a column"""
