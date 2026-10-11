@@ -81,7 +81,7 @@ class ModTree(QTreeWidget):
     in from outside are left to the window, which installs them."""
 
     modsMoved = Signal(list, str, int)  # mod names, separator ("" = none), place among its other mods (-1: end)
-    separatorDropped = Signal(str, str)  # dragged separator, separator it was dropped on
+    separatorsMoved = Signal(list, int)  # dragged separators, place among the other separators (-1: last)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -103,16 +103,31 @@ class ModTree(QTreeWidget):
         selected = {id(row) for row in self.selectedItems()}
         mods = [row.text(1) for row in self.modRows() if id(row) in selected]
         headings = [
-            row.data(0, GROUP_ROLE) for row in self.selectedItems() if isGroupItem(row) and row.data(0, GROUP_ROLE)
+            row.data(0, GROUP_ROLE) for row in self.headings() if id(row) in selected and row.data(0, GROUP_ROLE)
         ]
         if mods:
             target = self.modTarget(item, where, mods)
             if target is not None:
                 self.modsMoved.emit(mods, *target)
         elif headings:
-            group = groupOf(item)
-            if group is not None and group != headings[0]:
-                self.separatorDropped.emit(headings[0], group)
+            position = self.separatorTarget(item, where, headings)
+            if position is not None:
+                self.separatorsMoved.emit(headings, position)
+
+    def separatorTarget(self, item, where, moved: list[str]) -> int | None:
+        """The place among the other separators for separators dropped at this row"""
+        Position = QAbstractItemView.DropIndicatorPosition
+        group = groupOf(item)
+        if item is None or not group:
+            return -1  # Other mods, its mods or below everything: last
+        if group in moved:
+            return None  # onto itself
+        others = [heading.data(0, GROUP_ROLE) for heading in self.headings()]
+        others = [name for name in others if name and name not in moved]
+        index = others.index(group)
+        if isGroupItem(item) and where in (Position.AboveItem, Position.OnItem):
+            return index
+        return index + 1  # below a separator, or onto one of its mods
 
     def headings(self) -> list:
         return [self.topLevelItem(i) for i in range(self.topLevelItemCount()) if isGroupItem(self.topLevelItem(i))]

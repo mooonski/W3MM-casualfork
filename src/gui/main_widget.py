@@ -544,7 +544,7 @@ class CustomMainWidget(QWidget):
         self.treeWidget.itemClicked.connect(self.modClicked)
         # queued, so the list is filled again after Qt has finished with the drag
         self.treeWidget.modsMoved.connect(self.modsMoved, Qt.ConnectionType.QueuedConnection)
-        self.treeWidget.separatorDropped.connect(self.separatorDroppedOnSeparator, Qt.ConnectionType.QueuedConnection)
+        self.treeWidget.separatorsMoved.connect(self.separatorsMoved, Qt.ConnectionType.QueuedConnection)
         self.treeWidget.itemExpanded.connect(lambda item: self.groupFolded(item, False))
         self.treeWidget.itemCollapsed.connect(lambda item: self.groupFolded(item, True))
         self.treeWidget.installEventFilter(self)
@@ -2937,13 +2937,15 @@ class CustomMainWidget(QWidget):
     def listSortChanged(self, column: int, _order) -> None:
         data.getConfig().listsort = "custom" if column < 0 else ""
 
-    def separatorDroppedOnSeparator(self, dragged: str, target: str) -> None:
-        """A separator was dragged onto another one, and takes its place (onto Other mods: goes last)"""
+    def separatorsMoved(self, names: list[str], position: int) -> None:
+        """Separators were dragged to a new place among the others (-1: last, just above Other mods)"""
         order = orderedGroups(data.getConfig().groups, self.model.all())
-        if dragged not in order:
+        names = [name for name in order if name in names]
+        if not names:
             return
-        goal = order.index(target) if target in order else len(order) - 1
-        self.saveGroups(moveGroup(order, dragged, goal - order.index(dragged)))
+        arranged = arrange(order, names, position)
+        if arranged != order:
+            self.saveGroups(arranged)
 
     def addSeparator(self) -> None:
         """Adds an empty separator with a plain name; it can be renamed from its right-click menu"""

@@ -58,7 +58,7 @@ class ModTreeTests(unittest.TestCase):
         self.moves = []
         self.separators = []
         self.tree.modsMoved.connect(lambda names, group, position: self.moves.append((names, group, position)))
-        self.tree.separatorDropped.connect(lambda name, target: self.separators.append((name, target)))
+        self.tree.separatorsMoved.connect(lambda names, position: self.separators.append((names, position)))
 
     def drop(self, target, where=Position.OnItem, source=None):
         event = Mock()
@@ -135,13 +135,33 @@ class ModTreeTests(unittest.TestCase):
         self.assertEqual(moves, [(["C"], "", 0)])
         self.assertTrue(tree.dragEnabled())
 
-    def test_separator_dropped_on_another(self):
-        self.select(self.headings["Visuals"])
-        self.drop(self.headings["Combat"])
-        self.drop(self.rows["Boat"])
-        self.drop(self.headings["Visuals"])  # onto itself: nothing
-        self.assertEqual(self.separators, [("Visuals", "Combat"), ("Visuals", "")])
+    def test_separators_follow_the_drop_line(self):
+        self.select(self.headings["Combat"])
+        self.drop(self.headings["Visuals"], Position.AboveItem)
+        self.drop(self.headings["Visuals"], Position.OnItem)
+        self.drop(self.headings["Visuals"], Position.BelowItem)
+        self.drop(self.rows["Rain"], Position.AboveItem)  # among Visuals' mods: just after Visuals
+        self.drop(self.headings[""], Position.AboveItem)  # Other mods: last
+        self.drop(self.rows["Boat"], Position.BelowItem)
+        self.drop(None, Position.OnViewport)
+        self.drop(self.headings["Combat"], Position.AboveItem)  # onto itself: nothing
+        self.drop(self.rows["Blood"], Position.BelowItem)  # onto its own mods: nothing
+        self.assertEqual(
+            self.separators,
+            [(["Combat"], 0), (["Combat"], 0), (["Combat"], 1), (["Combat"], 1), (["Combat"], -1), (["Combat"], -1), (["Combat"], -1)],
+        )  # fmt: skip
         self.assertEqual(self.moves, [])
+
+    def test_several_separators_move_together(self):
+        self.select(self.headings["Visuals"], self.headings["Combat"], self.headings[""])
+        self.drop(None, Position.OnViewport)
+        self.assertEqual(self.separators, [(["Visuals", "Combat"], -1)])
+
+    def test_qt_can_start_dragging_a_separator(self):
+        index = self.tree.indexFromItem(self.headings["Visuals"])
+        self.assertTrue(self.tree.model().flags(index) & Qt.ItemFlag.ItemIsDragEnabled)
+        self.assertIsNotNone(self.tree.model().mimeData([index]))
+        self.assertTrue(self.tree.dragEnabled())
 
     def test_files_from_outside_are_left_to_the_window(self):
         event = self.drop(self.headings["Combat"], source=object())
@@ -189,14 +209,15 @@ class HandlerTests(unittest.TestCase):
 
     def test_reordering_separators(self):
         order = lambda: self.widget.saveGroups.call_args.args[0]  # noqa: E731
-        CustomMainWidget.separatorDroppedOnSeparator(self.widget, "Visuals", "Quests")
-        self.assertEqual(order(), ["Combat", "Quests", "Visuals"])
-        CustomMainWidget.separatorDroppedOnSeparator(self.widget, "Quests", "Visuals")
+        CustomMainWidget.separatorsMoved(self.widget, ["Quests"], 0)
         self.assertEqual(order(), ["Quests", "Visuals", "Combat"])
-        CustomMainWidget.separatorDroppedOnSeparator(self.widget, "Visuals", "")
+        CustomMainWidget.separatorsMoved(self.widget, ["Visuals"], -1)
         self.assertEqual(order(), ["Combat", "Quests", "Visuals"])
+        CustomMainWidget.separatorsMoved(self.widget, ["Quests", "Visuals"], 1)
+        self.assertEqual(order(), ["Combat", "Visuals", "Quests"])
         calls = self.widget.saveGroups.call_count
-        CustomMainWidget.separatorDroppedOnSeparator(self.widget, "Nope", "Combat")
+        CustomMainWidget.separatorsMoved(self.widget, ["Nope"], 0)
+        CustomMainWidget.separatorsMoved(self.widget, ["Visuals"], 0)  # already there
         self.assertEqual(self.widget.saveGroups.call_count, calls)
 
 
