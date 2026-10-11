@@ -39,7 +39,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSplitter,
-    QStyle,
     QTabWidget,
     QTextEdit,
     QToolBar,
@@ -85,6 +84,7 @@ from src.gui.alerts import (
 from src.gui.browse_widget import BrowseWidget
 from src.gui.details_dialog import DetailsDialog
 from src.gui.health_dialog import HealthDialog
+from src.gui.icons import icon
 from src.gui.mod_preview import ModPreview
 from src.gui.nexus_dialogs import (
     SWITCH,
@@ -441,7 +441,7 @@ class CustomMainWidget(QWidget):
         self.actionSetPriority.triggered.connect(self.setPriority)
         self.actionUnsetPriority.triggered.connect(self.unsetPriority)
         self.actionRestoreColumns.triggered.connect(self.restoreColumns)
-        self.actionCheckUpdates.triggered.connect(lambda: self.checkForUpdates())
+        self.actionCheckUpdates.triggered.connect(lambda: self.checkForUpdates(showDialog=False))
         self.actionUpdateMods.triggered.connect(self.updateSelectedMods)
         self.actionSetNexusMod.triggered.connect(self.setNexusMod)
         self.actionChooseFile.triggered.connect(self.chooseInstalledFile)
@@ -485,21 +485,22 @@ class CustomMainWidget(QWidget):
     def configureToolbar(self):
         '''Creates and configures toolbar'''
         self.toolBar.clear()
+        self.applyIcons()
 
         self.toolBar.addAction(self.actionInstall_Mods)
         self.toolBar.addAction(self.actionUninstall_Mods)
         self.toolBar.addAction(self.actionEnable_Disable_Mods)
         self.toolBar.addAction(self.actionCheckUpdates)
-        self.actionRun_Script_Merger.setIcon(self.scriptMergerIcon())
+        self.toolBar.addAction(self.actionUpdateMods)
         self.toolBar.addAction(self.actionRun_Script_Merger)
-        self.toolBar.setIconSize(QSize(32, 32))
+        self.toolBar.setIconSize(QSize(24, 24))
         self.toolBar.addSeparator()
 
         actionTemp = QAction(self.mainWindow)
         actionTemp.triggered.connect(lambda: self.openByConfigKey("mods"))
         actionTemp.setText("M")
         actionTemp.setIconText(translate("MainWindow", "Mods"))
-        actionTemp.setIcon(getIcon("mods.ico"))
+        actionTemp.setIcon(icon("mods"))
         actionTemp.setToolTip(translate("MainWindow", "Open Mods folder"))
         self.toolBar.addAction(actionTemp)
 
@@ -507,7 +508,7 @@ class CustomMainWidget(QWidget):
         actionTemp.triggered.connect(lambda: self.openByConfigKey("dlc"))
         actionTemp.setText("D")
         actionTemp.setIconText(translate("MainWindow", "DLC"))
-        actionTemp.setIcon(getIcon("dlc.ico"))
+        actionTemp.setIcon(icon("dlc"))
         actionTemp.setToolTip(translate("MainWindow", "Open DLC folder"))
         self.toolBar.addAction(actionTemp)
 
@@ -515,7 +516,7 @@ class CustomMainWidget(QWidget):
         actionTemp.triggered.connect(lambda: self.openByConfigKey("menu"))
         actionTemp.setText("I")
         actionTemp.setIconText(translate("MainWindow", "Menus"))
-        actionTemp.setIcon(getIcon("menu.ico"))
+        actionTemp.setIcon(icon("menus"))
         actionTemp.setToolTip(translate("MainWindow", "Open Menus folder"))
         self.toolBar.addAction(actionTemp)
 
@@ -523,7 +524,7 @@ class CustomMainWidget(QWidget):
         actionTemp.triggered.connect(lambda: self.openByConfigKey("settings"))
         actionTemp.setText("S")
         actionTemp.setIconText(translate("MainWindow", "Settings"))
-        actionTemp.setIcon(getIcon("settings.ico"))
+        actionTemp.setIcon(icon("folder"))
         actionTemp.setToolTip(translate("MainWindow", "Open Settings folder"))
         self.toolBar.addAction(actionTemp)
 
@@ -532,28 +533,28 @@ class CustomMainWidget(QWidget):
         actionTemp = QAction(self.mainWindow)
         actionTemp.triggered.connect(lambda: openFile(data.getConfig().menu + "/input.xml"))
         actionTemp.setText(translate("MainWindow", "Input Xml"))
-        actionTemp.setIcon(getIcon("xml.ico"))
+        actionTemp.setIcon(icon("xml"))
         actionTemp.setToolTip(translate("MainWindow", "Open input.xml file"))
         self.toolBar.addAction(actionTemp)
 
         actionTemp = QAction(self.mainWindow)
         actionTemp.triggered.connect(lambda: openFile(data.getConfig().settings + "/input.settings"))
         actionTemp.setText(translate("MainWindow", "Input Settings"))
-        actionTemp.setIcon(getIcon("input.ico"))
+        actionTemp.setIcon(icon("keyboard"))
         actionTemp.setToolTip(translate("MainWindow", "Open input.settings file"))
         self.toolBar.addAction(actionTemp)
 
         actionTemp = QAction(self.mainWindow)
         actionTemp.triggered.connect(lambda: openFile(data.getConfig().settings + "/" + data.getConfig().usersettings))
         actionTemp.setText(translate("MainWindow", "User Settings"))
-        actionTemp.setIcon(getIcon("user.ico"))
+        actionTemp.setIcon(icon("sliders"))
         actionTemp.setToolTip(translate("MainWindow", "Open user.settings file"))
         self.toolBar.addAction(actionTemp)
 
         actionTemp = QAction(self.mainWindow)
         actionTemp.triggered.connect(lambda: openFile(data.getConfig().settings + "/mods.settings"))
         actionTemp.setText(translate("MainWindow", "Mods Settings"))
-        actionTemp.setIcon(getIcon("modset.ico"))
+        actionTemp.setIcon(icon("order"))
         actionTemp.setToolTip(translate("MainWindow", "Open mods.settings file"))
         self.toolBar.addAction(actionTemp)
 
@@ -565,6 +566,19 @@ class CustomMainWidget(QWidget):
         self.actionAddToToolbar = QAction(self.mainWindow)
         self.actionAddToToolbar.triggered.connect(self.addToToolbar)
         self.actionAddToToolbar.setText(translate("MainWindow", "Add New.."))
+
+    def applyIcons(self) -> None:
+        '''Line icons in the current theme's colours'''
+        for action, name in (
+            (self.actionInstall_Mods, "add"),
+            (self.actionUninstall_Mods, "remove"),
+            (self.actionEnable_Disable_Mods, "toggle"),
+            (self.actionCheckUpdates, "check"),
+            (self.actionUpdateMods, "update"),
+            (self.actionRun_Script_Merger, "merge"),
+        ):
+            action.setIcon(icon(name))
+            action.setIconVisibleInMenu(False)
 
     def openMenu(self, position):
         '''Right click menu on mod list (Left panel)'''
@@ -1123,15 +1137,6 @@ class CustomMainWidget(QWidget):
         except Exception as err:
             self.output(formatUserError(err))
 
-    def scriptMergerIcon(self):
-        '''Script Merger's own icon when it can be found, otherwise a generic one'''
-        executable = data.getConfig().scriptmerger
-        if executable and path.isfile(executable):
-            icon = QFileIconProvider().icon(QFileInfo(executable))
-            if not icon.isNull():
-                return icon
-        return self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
-
     def scriptMergerRunning(self) -> bool:
         process = getattr(self, "scriptMergerProcess", None)
         return process is not None and process.poll() is None
@@ -1313,7 +1318,9 @@ class CustomMainWidget(QWidget):
             self.nexusWorker = None
         self.processNxmQueue()
 
-    def checkForUpdates(self, names: list[str] | None = None) -> None:
+    def checkForUpdates(
+        self, names: list[str] | None = None, showDialog: bool = True, onlyUpdates: bool = False
+    ) -> None:
         '''Checks the given mods (default: all with a Nexus ID) and shows the updates dialog'''
         if self.nexusBusy():
             return
@@ -1363,7 +1370,7 @@ class CustomMainWidget(QWidget):
             + " "
             + translate("MainWindow", "on Nexus...")
         )
-        self.runNexus(work, lambda results: self.updatesChecked(checked, results))
+        self.runNexus(work, lambda results: self.updatesChecked(checked, results, showDialog, onlyUpdates))
 
     def scriptMergerChecked(self, files: ModFiles | str) -> None:
         '''Reports whether a newer Script Merger is on Nexus'''
@@ -1400,7 +1407,9 @@ class CustomMainWidget(QWidget):
         if answer == QMessageBox.StandardButton.Yes:
             openUrl(url)
 
-    def updatesChecked(self, names: list[str], results: dict) -> None:
+    def updatesChecked(
+        self, names: list[str], results: dict, showDialog: bool = True, onlyUpdates: bool = False
+    ) -> None:
         if "scriptmerger" in results:
             self.scriptMergerChecked(results["scriptmerger"])
         rows = []
@@ -1436,6 +1445,15 @@ class CustomMainWidget(QWidget):
             if row.check.state == FAILED:
                 self.output(f"  {row.name}: {row.check.message}")
         self.refreshList()
+        if not showDialog:
+            if available:
+                self.output(translate("MainWindow", "Click Update to install them."))
+            return
+        if onlyUpdates:
+            rows = [row for row in rows if row.check.state == UPDATE_AVAILABLE]
+            if not rows:
+                self.output(translate("MainWindow", "Every mod is up to date."))
+                return
         if not rows:
             return
         dialog = UpdatesDialog(self, rows)
@@ -1445,7 +1463,7 @@ class CustomMainWidget(QWidget):
     def updateSelectedMods(self) -> None:
         selected = self.getSelectedMods()
         if not selected:
-            self.output(translate("MainWindow", "Select the mods to update first."))
+            self.checkForUpdates(showDialog=True, onlyUpdates=True)
             return
         missing = [name for name in selected if not (self.model.get(name).nexus and self.model.get(name).nexus.modId)]
         for name in missing:
@@ -2442,6 +2460,10 @@ class CustomMainWidget(QWidget):
         else:
             data.getApp().setPalette(get_system_palette())
         data.getConfig().write_config()
+        # icons and status colours are drawn in the theme's colours, so draw them again
+        self.configureToolbar()
+        self.forkLabel.setStyleSheet(f"color: {statusColor('muted').name()};")
+        self.refreshList()
 
     def checkTheme(self):
         theme = data.getConfig().theme
@@ -2453,7 +2475,6 @@ class CustomMainWidget(QWidget):
     def createActions(self):
         '''Create all action objects'''
         self.actionInstall_Mods = QAction(self.mainWindow)
-        self.actionInstall_Mods.setIcon(getIcon("Add.ico"))
         self.actionInstall_Mods.setIconVisibleInMenu(False)
         self.actionInstall_Mods.setObjectName("actionInstall_Mods")
         self.actionInstall_Mods.setIconText(translate("MainWindow", "Add"))
@@ -2463,13 +2484,11 @@ class CustomMainWidget(QWidget):
         self.actionRestoreColumns.setObjectName("actionRestoreColumns")
 
         self.actionUninstall_Mods = QAction(self.mainWindow)
-        self.actionUninstall_Mods.setIcon(getIcon("rem.ico"))
         self.actionUninstall_Mods.setIconVisibleInMenu(False)
         self.actionUninstall_Mods.setObjectName("actionUninstall_Mods")
         self.actionUninstall_Mods.setIconText(translate("MainWindow", "Remove"))
 
         self.actionEnable_Disable_Mods = QAction(self.mainWindow)
-        self.actionEnable_Disable_Mods.setIcon(getIcon("check.ico"))
         self.actionEnable_Disable_Mods.setIconVisibleInMenu(False)
         self.actionEnable_Disable_Mods.setObjectName("actionEnable_Disable_Mods")
         self.actionEnable_Disable_Mods.setIconText(translate("MainWindow", "Toggle"))
@@ -2560,10 +2579,8 @@ class CustomMainWidget(QWidget):
 
         # Nexus actions
         self.actionCheckUpdates = QAction(self.mainWindow)
-        self.actionCheckUpdates.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
         self.actionCheckUpdates.setIconVisibleInMenu(False)
         self.actionCheckUpdates.setObjectName("actionCheckUpdates")
-        self.actionCheckUpdates.setIconText(translate("MainWindow", "Updates"))
 
         self.actionUpdateMods = QAction(self.mainWindow)
         self.actionUpdateMods.setObjectName("actionUpdateMods")
@@ -2847,10 +2864,16 @@ class CustomMainWidget(QWidget):
         self.actionUnsetPriority.setShortcut("Ctrl+U")
         self.actionUnsetPriority.setText(translate("MainWindow", "Remove Priority"))
         self.actionCheckUpdates.setText(translate("MainWindow", "Check for Updates"))
-        self.actionCheckUpdates.setToolTip(translate("MainWindow", "Check all mods with a Nexus ID for updates"))
+        self.actionCheckUpdates.setToolTip(
+            translate("MainWindow", "Check all mods with a Nexus ID for updates and show them in the Update column")
+        )
         self.actionCheckUpdates.setShortcut("F7")
-        self.actionUpdateMods.setText(translate("MainWindow", "Update Selected Mods"))
-        self.actionUpdateMods.setToolTip(translate("MainWindow", "Check the selected mods and update them"))
+        self.actionCheckUpdates.setIconText(translate("MainWindow", "Check for Updates"))
+        self.actionUpdateMods.setText(translate("MainWindow", "Update Mods..."))
+        self.actionUpdateMods.setIconText(translate("MainWindow", "Update"))
+        self.actionUpdateMods.setToolTip(
+            translate("MainWindow", "Update the selected mods, or every mod with an update if none are selected")
+        )
         self.actionUpdateMods.setShortcut("Ctrl+F7")
         self.actionSetNexusMod.setText(translate("MainWindow", "Set Nexus Mod..."))
         self.actionChooseFile.setText(translate("MainWindow", "Choose Nexus File..."))

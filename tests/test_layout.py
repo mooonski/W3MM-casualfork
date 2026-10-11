@@ -166,7 +166,16 @@ class MainWindowLayoutTests(LayoutTestCase):
     def checkMainWindow(self, window, widget) -> None:
         self.assertEqual([widget.tabs.tabText(i) for i in range(widget.tabs.count())], ["Installed", "Browse Nexus"])
         actions = widget.toolBar.actions()
-        self.assertEqual(actions.index(widget.actionRun_Script_Merger), actions.index(widget.actionCheckUpdates) + 1)
+        first = actions.index(widget.actionCheckUpdates)
+        self.assertEqual(
+            actions[first : first + 3],
+            [widget.actionCheckUpdates, widget.actionUpdateMods, widget.actionRun_Script_Merger],
+        )
+        self.assertEqual(
+            [actions[i].iconText() for i in range(first, first + 3)], ["Check for Updates", "Update", "Script Merger"]
+        )
+        self.assertEqual(widget.toolBar.iconSize().width(), 24)
+        self.assertFalse(widget.actionUpdateMods.icon().isNull())
         self.assertEqual(widget.actionRun_Script_Merger.iconText(), "Script Merger")
         self.assertIn("(casual fork 0.1)", window.windowTitle())
         self.assertIs(widget.menubar.cornerWidget(Qt.Corner.TopRightCorner), widget.forkLabel)

@@ -446,10 +446,3 @@ class ToolbarButtonTests(unittest.TestCase):
             CustomMainWidget.scriptMergerClosed(self.widget)
             self.assertIn(text, self.widget.output.call_args.args[0])
         self.assertEqual(self.widget.refreshLoadOrder.call_count, 3)
-
-    def test_icon(self):
-        widget = SimpleNamespace(style=lambda: QApplication.style())
-        self.config.scriptmerger = sys.executable
-        self.assertFalse(CustomMainWidget.scriptMergerIcon(widget).isNull())
-        self.config.scriptmerger = ""
-        self.assertFalse(CustomMainWidget.scriptMergerIcon(widget).isNull())

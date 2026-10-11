@@ -105,7 +105,7 @@ class CheckForUpdatesTests(HandlerTestCase):
         self.assertEqual(self.client.modFiles.call_count, 2)
         progress.assert_called_with(2, 2)
         done(results)
-        self.widget.updatesChecked.assert_called_once_with(["A", "B", "A2"], results)
+        self.widget.updatesChecked.assert_called_once_with(["A", "B", "A2"], results, True, False)
 
     def test_only_selected_mods_are_checked(self):
         self.add(mod("A", NexusInfo(1)), mod("B", NexusInfo(2)))
@@ -158,6 +158,25 @@ class UpdatesCheckedTests(HandlerTestCase):
         self.assertEqual([row.name for row in rows], ["A", "B"])
         self.widget.refreshList.assert_called()
         self.widget.downloadAndUpdate.assert_called_once_with([("A", self.files.files[2])])
+
+    def test_check_only_marks_the_list(self):
+        with patch("src.gui.main_widget.UpdatesDialog") as dialog:
+            CustomMainWidget.updatesChecked(self.widget, ["A", "B"], {5: self.files, 6: "hidden"}, showDialog=False)
+        dialog.assert_not_called()
+        self.assertEqual(self.widget.updateChecks["A"].state, UPDATE_AVAILABLE)
+        self.assertIn("Click Update to install them.", self.outputs())
+        self.widget.refreshList.assert_called()
+
+    def test_update_without_selection_shows_only_updates(self):
+        with patch("src.gui.main_widget.UpdatesDialog") as dialog:
+            dialog.return_value.exec.return_value = False
+            CustomMainWidget.updatesChecked(self.widget, ["A", "B"], {5: self.files, 6: "hidden"}, True, True)
+        self.assertEqual([row.name for row in dialog.call_args.args[1]], ["A"])
+        self.widget.model.modList["A"].nexus = NexusInfo(5, fileId=2)
+        with patch("src.gui.main_widget.UpdatesDialog") as dialog:
+            CustomMainWidget.updatesChecked(self.widget, ["A"], {5: self.files}, True, True)
+        dialog.assert_not_called()
+        self.assertIn("Every mod is up to date.", self.outputs())
 
     def test_closing_the_dialog_downloads_nothing(self):
         with patch("src.gui.main_widget.UpdatesDialog") as dialog:
@@ -289,7 +308,9 @@ class LinkingTests(HandlerTestCase):
         self.add(mod("A", NexusInfo(1)), mod("B"))
         self.widget.getSelectedMods.return_value = []
         CustomMainWidget.updateSelectedMods(self.widget)
-        self.assertIn("Select the mods", self.outputs())
+        # nothing selected: every mod with an update
+        self.widget.checkForUpdates.assert_called_once_with(showDialog=True, onlyUpdates=True)
+        self.widget.checkForUpdates.reset_mock()
         self.widget.getSelectedMods.return_value = ["B"]
         CustomMainWidget.updateSelectedMods(self.widget)
         self.widget.checkForUpdates.assert_not_called()
