@@ -11,6 +11,7 @@ from typing import List, Tuple
 from src.domain.key import Key
 from src.domain.mod import Mod
 from src.domain.usersetting import Usersetting
+from src.util.binfiles import binFileTarget
 from src.util.util import (
     detectEncoding,
     getProgramRootFolder,
@@ -48,7 +49,15 @@ def isValidModFolder(modPath: str) -> bool:
             return True
         if any(isBaseIniFile(current_dir, file) for file in getAllFilesFromDirectory(current_dir)):
             return True
+        if any(binTargetIn(modPath, current_dir, file) for file in getAllFilesFromDirectory(current_dir)):
+            return True
     return False
+
+
+def binTargetIn(modPath: str, current_dir: str, file: str) -> str:
+    """Where a file of the mod goes under the game's bin folder, or "" """
+    relative = normalizePath(path.relpath(path.join(current_dir, file), modPath))
+    return binFileTarget(relative.split("/"))
 
 
 def fetchModFromDirectory(modPath: str) -> Tuple[Mod, List[str], List[str]]:
@@ -59,7 +68,14 @@ def fetchModFromDirectory(modPath: str) -> Tuple[Mod, List[str], List[str]]:
     for current_dir, _, _ in walk(modPath):
         if fetchDataIfRelevantFolder(current_dir, mod):
             mod_dirs.append(normalizePath(current_dir))
-        config_files += fetchDataFromRelevantFiles(current_dir, mod)
+        bins = {}
+        for file in getAllFilesFromDirectory(current_dir):
+            target = binTargetIn(modPath, current_dir, file)
+            if target and target.casefold() not in (known.casefold() for known in mod.bins):
+                mod.bins.append(target)
+                mod.binSources[target] = normalizePath(current_dir + "/" + file)
+                bins[file] = target
+        config_files += fetchDataFromRelevantFiles(current_dir, mod, skip=set(bins))
         mod_readmes.extend(fetchReadmes(current_dir))
     mod.readmes = mod_readmes
     return mod, mod_dirs, config_files
@@ -121,9 +137,11 @@ def fetchDataIfRelevantFolder(current_dir: str, mod: Mod) -> bool:
     return False
 
 
-def fetchDataFromRelevantFiles(current_dir: str, mod: Mod) -> List[str]:
+def fetchDataFromRelevantFiles(current_dir: str, mod: Mod, skip: set[str] | None = None) -> List[str]:
     config_files: List[str] = []
     for file in getAllFilesFromDirectory(current_dir):
+        if skip and file in skip:
+            continue  # a game bin file, not a menu or settings file
         if isMenuXmlFile(file):
             mod.menus.append(file)
             config_files.append(normalizePath(current_dir + "/" + file))

@@ -86,7 +86,14 @@ def checkHealth(
                 issues.append(
                     Issue(WARNING, mod.name, "Menu file is missing", f"{name} isn't in the game's menu folder")
                 )
-        if not mod.files and not mod.dlcs and not mod.menus and not mod.inis:
+        game = getattr(config, "game", "") or ""
+        for relative in mod.bins if game else []:
+            target = Mod.binTarget(relative)
+            if not path.isfile(target) and not path.isfile(target + ".disabled"):
+                issues.append(
+                    Issue(WARNING, mod.name, "Game file is missing", f"bin/{relative} isn't in the game folder")
+                )
+        if not mod.files and not mod.dlcs and not mod.menus and not mod.inis and not mod.bins:
             issues.append(Issue(WARNING, mod.name, "Entry has no files", "Nothing is installed for it"))
 
     for name, reasons in sorted(duplicateEntries(model).items(), key=lambda item: item[0].lower()):

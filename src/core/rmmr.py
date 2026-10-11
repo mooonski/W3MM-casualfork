@@ -23,6 +23,7 @@ from src.domain.key import Key
 from src.domain.mod import Mod
 from src.domain.usersetting import Usersetting
 from src.globals import data
+from src.util.binfiles import safeBinPath
 from src.util.util import normalizePath
 
 MENU_PREFIX = "bin/config/r4game/user_config_matrix/pc/"
@@ -122,7 +123,12 @@ def translateEntry(element: XML.Element) -> RmmrMod:
             if ini and note not in notes:
                 notes.append(note)
         elif child.tag == "bin" and value:
-            notes.append(f"{value} isn't tracked here")
+            relative = normalizePath(value)
+            relative = safeBinPath(relative[4:] if relative.casefold().startswith("bin/") else "")
+            if relative and relative not in mod.bins:
+                mod.bins.append(relative)
+            elif not relative:
+                notes.append(f"{value} isn't tracked here")
         elif child.tag == "xmlkey" and value:
             mod.xmlkeys.append(value)
         elif child.tag == "hidden" and value:

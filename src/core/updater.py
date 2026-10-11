@@ -303,6 +303,13 @@ class ModUpdater:
                 target = path.join(backup, BASE_DATA, ini)
                 os.makedirs(path.dirname(target), exist_ok=True)
                 shutil.copy2(source, target)
+        for relative in mod.bins:
+            source = Mod.binTarget(relative)
+            if path.isfile(source):
+                target = path.join(backup, "data", "bin", *relative.split("/"))
+                os.makedirs(path.dirname(target), exist_ok=True)
+                shutil.copy2(source, target)
+                removeInstalledFile(source)
 
     @staticmethod
     def _listing() -> dict[str, set[str]]:
@@ -310,7 +317,22 @@ class ModUpdater:
         return {
             "mods": set(os.listdir(config.mods)) if config.mods else set(),
             "dlc": set(os.listdir(config.dlc)) if config.dlc else set(),
+            "bin": ModUpdater._binListing(),
         }
+
+    @staticmethod
+    def _binListing() -> set[str]:
+        """Files in the game's bin folder outside bin/config, as paths like "x64_dx12/name.addon64" """
+        root = path.join(data.getConfig().game or "", "bin")
+        found: set[str] = set()
+        if not data.getConfig().game or not path.isdir(root):
+            return found
+        for folder, directories, files in os.walk(root):
+            if path.normcase(folder) == path.normcase(root):
+                directories[:] = [name for name in directories if name.casefold() != "config"]
+            for name in files:
+                found.add(path.relpath(path.join(folder, name), root).replace(os.sep, "/"))
+        return found
 
     def _rollback(self, mod: Mod, wasEnabled: bool, backup: str, before: dict[str, set[str]] | None) -> None:
         config = data.getConfig()
@@ -322,6 +344,8 @@ class ModUpdater:
                     continue
                 for name in set(os.listdir(base)) - before[kind]:
                     removeDirectory(path.join(base, name))
+            for relative in self._binListing() - before.get("bin", set()):
+                removeInstalledFile(Mod.binTarget(relative))
         # 2. move the stashed folders back
         for folder in ("data", "extra"):
             for kind, base in bases.items():
@@ -333,6 +357,17 @@ class ModUpdater:
                     if path.exists(target):
                         removeDirectory(target)
                     shutil.copytree(path.join(stashed, name), target)
+        stashed = path.join(backup, "data", "bin")
+        if path.isdir(stashed):
+            for folder, directories, files in os.walk(stashed):
+                if path.normcase(folder) == path.normcase(stashed):
+                    directories[:] = [name for name in directories if name.casefold() != "config"]
+                for name in files:
+                    relative = path.relpath(path.join(folder, name), stashed).replace(os.sep, "/")
+                    target = checkInstalledPath(Mod.binTarget(relative), modDirectory=False)
+                    os.makedirs(path.dirname(target), exist_ok=True)
+                    with open(path.join(folder, name), "rb") as original, atomicWrite(target, "wb") as copy:
+                        copyfileobj(original, copy)
         # 3. put the entry back the way it was
         self.model.modList[mod.name] = mod
         if not wasEnabled:

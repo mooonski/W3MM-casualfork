@@ -19,6 +19,7 @@ from src.gui.alerts import (
     MessageAlertReadingConfigurationFailed,
     MessageAlertWritingFailed,
 )
+from src.util.binfiles import safeBinPath
 from src.util.syntax import *
 from src.util.util import *
 
@@ -179,6 +180,10 @@ class Model:
             mod.menus.append(str(elem.text))
         for elem in root.findall('ini'):
             mod.inis.append(str(elem.text))
+        for elem in root.findall('bin'):
+            relative = safeBinPath(str(elem.text or ''))
+            if relative:
+                mod.bins.append(relative)
         for elem in root.findall('xmlkey'):
             mod.xmlkeys.append(str(elem.text))
         for elem in root.findall('hidden'):
@@ -248,6 +253,8 @@ class Model:
                 XML.SubElement(elem, 'menu').text = menu
         for ini in mod.inis:
             XML.SubElement(elem, 'ini').text = ini
+        for relative in mod.bins:
+            XML.SubElement(elem, 'bin').text = relative
         if mod.xmlkeys:
             for xml in mod.xmlkeys:
                 XML.SubElement(elem, 'xmlkey').text = xml

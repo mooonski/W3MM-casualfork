@@ -108,9 +108,9 @@ class TranslationTests(unittest.TestCase):
             [
                 "RMMR merged settings into bin/config/base/rendering.ini; they stay as they are",
                 "RMMR merged settings into bin/config/platform/pc/Other.ini; they stay as they are",
-                "bin/x64_dx12/xinput9_1_0.dll isn't tracked here",
             ],
         )
+        self.assertEqual(mod.bins, ["x64_dx12/xinput9_1_0.dll"])
 
     def test_unset_priority_and_unreadable_inventory(self):
         self.assertFalse(translateEntry(XML.fromstring(entry("A"))).mod._priority)

@@ -1,5 +1,6 @@
 '''Core functionality'''
 
+import filecmp
 from dataclasses import dataclass
 from os import listdir, path
 from shutil import copyfileobj
@@ -160,10 +161,10 @@ class Installer:
 
             self.progress(0.8)
 
-            if not mod.files and not mod.dlcs and not mod.menus and not mod.inis:
+            if not mod.files and not mod.dlcs and not mod.menus and not mod.inis and not mod.bins:
                 raise Exception('No data found in ' + "'" + mod.name + "'")
 
-            incomplete = False
+            incomplete = self.installBinFiles(mod, keep_disabled)
             try:
                 if not keep_disabled:
                     mod.installMenus()
@@ -237,6 +238,11 @@ class Installer:
                     installed.date = mod.date
                     installed.menus = mod.menus
                     installed.inis = mod.inis
+                    # files the old version had in bin and this one hasn't are taken out
+                    for relative in installed.bins:
+                        if relative.casefold() not in (new.casefold() for new in mod.bins):
+                            self.removeBinFile(relative)
+                    installed.bins = mod.bins
                     installed.inputsettings = mod.inputsettings
                     installed.readmes = mod.readmes
                     installed.nexus = mod.nexus or installed.nexus
@@ -280,6 +286,8 @@ class Installer:
                 )
             self.removeModDlcs(mod)
             self.removeModData(mod)
+            for relative in mod.bins:
+                self.removeBinFile(relative)
             self.model.remove(mod.name)
             return True
         except Exception as err:
@@ -376,6 +384,69 @@ class Installer:
             target = path.join(base, installed)
             if path.exists(target):
                 removeDirectory(target)
+
+    def installBinFiles(self, mod: Mod, keepDisabled: bool = False) -> bool:
+        """Copies the mod's files for the game's bin folder (ReShade add-ons, shaders...). A file that is already
+        in the game is never overwritten unless it is this mod's own: one from another mod, the game or something
+        installed by hand is left alone (when it is identical, the mod takes it over). Returns True when some
+        files were left out."""
+        if not mod.bins:
+            return False
+        own = {relative.casefold() for other in self.model.all() if other.name == mod.name for relative in other.bins}
+        owners = {
+            relative.casefold(): other.name
+            for other in self.model.all()
+            if other.name != mod.name
+            for relative in other.bins
+        }
+        installed: list[str] = []
+        skipped: list[str] = []
+        for relative in mod.bins:
+            key = relative.casefold()
+            source = mod.binSources.get(relative, '')
+            try:
+                target = checkInstalledPath(Mod.binTarget(relative), modDirectory=False)
+                if key in owners:
+                    skipped.append(f"bin/{relative} " + translate("MainWindow", "belongs to") + f" {owners[key]}")
+                    continue
+                present = [name for name in (target, target + '.disabled') if path.isfile(name)]
+                if present and key not in own:
+                    if path.isfile(target) and source and filecmp.cmp(source, target, shallow=False):
+                        installed.append(relative)  # identical: this mod looks after it from now on
+                        continue
+                    skipped.append(
+                        f"bin/{relative} " + translate("MainWindow", "is already in the game and isn't from this mod")
+                    )
+                    continue
+                destination = target + '.disabled' if keepDisabled else target
+                for leftover in present:
+                    if leftover != destination:
+                        removeInstalledFile(leftover)
+                os.makedirs(path.dirname(destination), exist_ok=True)
+                with open(source, 'rb') as original, atomicWrite(destination, 'wb') as copy:
+                    copyfileobj(original, copy)
+                installed.append(relative)
+            except (OSError, ValueError) as error:
+                skipped.append(f"bin/{relative}: {formatUserError(error)}")
+        mod.bins = installed
+        if installed:
+            self.output(
+                translate("MainWindow", "Installed")
+                + f" {len(installed)} "
+                + translate("MainWindow", "files in the game's bin folder:")
+                + " "
+                + ", ".join(installed)
+            )
+        for problem in skipped:
+            self.output(translate("MainWindow", "Not installed:") + f" {problem}")
+        return bool(skipped)
+
+    def removeBinFile(self, relative: str) -> None:
+        """Removes one of a mod's files from the game's bin folder, enabled or disabled"""
+        target = Mod.binTarget(relative)
+        for installed in (target, target + '.disabled'):
+            if path.isfile(installed):
+                removeInstalledFile(installed)
 
     def removeModMenus(self, mod):
         '''Removes menu data'''

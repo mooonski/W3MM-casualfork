@@ -36,6 +36,11 @@ class Mod:
     hidden: List[str] = field(default_factory=list)
     readmes: List[str] = field(default_factory=list)
     inis: List[str] = field(default_factory=list)
+    # files for the game's bin folder outside bin/config (e.g. ReShade add-ons), as paths like
+    # "x64_dx12/name.addon64"; while the mod is disabled they're renamed to end in .disabled
+    bins: List[str] = field(default_factory=list)
+    # where the files in bins come from while installing (not stored)
+    binSources: dict = field(default_factory=dict, compare=False, repr=False)
     nexus: Optional[NexusInfo] = None
     group: str = ''  # the group it is shown under in the mod list
     listorder: int = 0  # its place under that group when the list is in the user's own order (0: last, A to Z)
@@ -133,6 +138,9 @@ class Mod:
                                     renameInstalledPath(
                                         subdir + "/" + file, subdir + "/" + file[:-9], modDirectory=True
                                     )
+            for target in self.binTargets():
+                if not path.exists(target) and path.exists(target + ".disabled"):
+                    renameInstalledPath(target + ".disabled", target, modDirectory=False)
             for filedata in iter(self.files):
                 mods_directory = data.getConfig().mods
                 if mods_directory is None:
@@ -168,6 +176,9 @@ class Mod:
                                 renameInstalledPath(
                                     path.join(subdir, file), path.join(subdir, file) + ".disabled", modDirectory=True
                                 )
+            for target in self.binTargets():
+                if path.exists(target) and not path.exists(target + ".disabled"):
+                    renameInstalledPath(target, target + ".disabled", modDirectory=False)
             for filedata in iter(self.files):
                 mods_directory = data.getConfig().mods
                 if mods_directory is None:
@@ -180,6 +191,15 @@ class Mod:
                             modDirectory=True,
                         )
             self.enabled = False
+
+    @staticmethod
+    def binTarget(relative: str) -> str:
+        """Where a file of bins goes in the game: <game>/bin/<relative>"""
+        game = data.getConfig().game or ''
+        return path.normpath(path.join(game, 'bin', *relative.replace('\\', '/').split('/')))
+
+    def binTargets(self) -> list[str]:
+        return [self.binTarget(relative) for relative in self.bins] if data.getConfig().game else []
 
     def checkPriority(self):
         if not self.priority:
@@ -492,6 +512,10 @@ class Mod:
             string += "\n" + translate("MOD", "DLC:") + "\n"
             for dlc in iter(self.dlcs):
                 string += dlc + "\n"
+        if self.bins:
+            string += "\n" + translate("MOD", "GAME FILES (bin):") + "\n"
+            for relative in iter(self.bins):
+                string += relative + "\n"
         if self.menus:
             string += "\n" + translate("MOD", "MENUS:") + "\n"
             for menu in iter(self.menus):
