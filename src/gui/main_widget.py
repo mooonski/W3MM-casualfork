@@ -53,7 +53,17 @@ from src.core.conflicts import ConflictScan, findConflicts, loadOrder
 from src.core.duplicates import duplicateEntries, matchingEntries, versionNote
 from src.core.endorsements import EndorsementCache
 from src.core.fetcher import isArchive
-from src.core.groups import addGroup, cleanName, moveGroup, orderedGroups, removeGroup, renameGroup, uniqueName
+from src.core.groups import (
+    addGroup,
+    arrange,
+    cleanName,
+    listKey,
+    moveGroup,
+    orderedGroups,
+    removeGroup,
+    renameGroup,
+    uniqueName,
+)
 from src.core.health import ERROR, INFO, WARNING, Issue, checkHealth
 from src.core.history import FAILED as DOWNLOAD_FAILED
 from src.core.history import INSTALLED, KEPT, LINK, UPDATE, UPDATED, WEBSITE, Download, DownloadHistory
@@ -451,7 +461,11 @@ class CustomMainWidget(QWidget):
 
         self.treeWidget.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.treeWidget.header().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.treeWidget.sortByColumn(1, Qt.SortOrder.AscendingOrder)
+        if data.getConfig().listsort == "custom":
+            self.treeWidget.sortByColumn(-1, Qt.SortOrder.AscendingOrder)
+        else:
+            self.treeWidget.sortByColumn(1, Qt.SortOrder.AscendingOrder)
+        self.treeWidget.header().sortIndicatorChanged.connect(self.listSortChanged)
 
         self.loadOrder.header().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
         self.loadOrder.header().setStretchLastSection(False)
@@ -529,7 +543,7 @@ class CustomMainWidget(QWidget):
         self.treeWidget.itemChanged.connect(self.modToggled)
         self.treeWidget.itemClicked.connect(self.modClicked)
         # queued, so the list is filled again after Qt has finished with the drag
-        self.treeWidget.modsDropped.connect(self.modsDroppedOnSeparator, Qt.ConnectionType.QueuedConnection)
+        self.treeWidget.modsMoved.connect(self.modsMoved, Qt.ConnectionType.QueuedConnection)
         self.treeWidget.separatorDropped.connect(self.separatorDroppedOnSeparator, Qt.ConnectionType.QueuedConnection)
         self.treeWidget.itemExpanded.connect(lambda item: self.groupFolded(item, False))
         self.treeWidget.itemCollapsed.connect(lambda item: self.groupFolded(item, True))
@@ -655,6 +669,7 @@ class CustomMainWidget(QWidget):
         clicked = self.treeWidget.itemAt(position)
         if clicked is None:
             menu.addAction(translate("MainWindow", "Add Separator"), self.addSeparator)
+            menu.addAction(translate("MainWindow", "Sort by My Order"), self.sortByMyOrder)
             menu.exec(self.treeWidget.viewport().mapToGlobal(position))
             return
         if isGroupItem(clicked):
@@ -2534,10 +2549,12 @@ class CustomMainWidget(QWidget):
         try:
             selected = self.getSelectedMods()
             self.treeWidget.clear()
+            if data.getConfig().listsort == "custom" and self.treeWidget.sortColumn() != -1:
+                self.treeWidget.sortByColumn(-1, Qt.SortOrder.AscendingOrder)
             headers = self.groupHeaders()
             duplicates = duplicateEntries(self.model)
             moddata = []
-            for mod in self.model.all():
+            for mod in sorted(self.model.all(), key=listKey):
                 if len(self.searchString) > 0:
                     if self.searchString.lower() not in mod.name.lower():
                         continue
@@ -2807,7 +2824,6 @@ class CustomMainWidget(QWidget):
         """Headings for the mod list's groups (and one for mods without a group), or none when no group exists"""
         order = orderedGroups(data.getConfig().groups, self.model.all())
         self.treeWidget.setRootIsDecorated(bool(order))
-        self.treeWidget.setDragEnabled(bool(order))
         headers = {}
         if not order:
             return headers
@@ -2866,6 +2882,7 @@ class CustomMainWidget(QWidget):
         """Right-click menu of a group heading"""
         if not name:
             menu.addAction(translate("MainWindow", "Add Separator"), self.addSeparator)
+            menu.addAction(translate("MainWindow", "Sort by My Order"), self.sortByMyOrder)
             return
         order = orderedGroups(data.getConfig().groups, self.model.all())
         menu.addAction(translate("MainWindow", "Rename Separator..."), lambda: self.renameModGroup(name))
@@ -2875,6 +2892,7 @@ class CustomMainWidget(QWidget):
         down.setEnabled(order.index(name) < len(order) - 1)
         menu.addSeparator()
         menu.addAction(translate("MainWindow", "Add Separator"), self.addSeparator)
+        menu.addAction(translate("MainWindow", "Sort by My Order"), self.sortByMyOrder)
         menu.addAction(translate("MainWindow", "Remove Separator (keeps its mods)"), lambda: self.removeModGroup(name))
 
     def askGroupName(self, title: str, current: str = "") -> str:
@@ -2890,18 +2908,34 @@ class CustomMainWidget(QWidget):
         """Puts the selected mods in the named group ("" takes them out of their group)"""
         selected = [self.model.modList[n] for n in self.getSelectedMods() if n in self.model.modList]
         for mod in selected:
+            if mod.group != name:
+                mod.listorder = 0
             mod.group = name
         order = orderedGroups(data.getConfig().groups, self.model.all())
         self.saveGroups(addGroup(order, name) if name else order)
 
-    def modsDroppedOnSeparator(self, names: list[str], name: str) -> None:
-        """Mods were dragged onto a separator ("" is Other mods)"""
-        mods = [self.model.modList[n] for n in names if n in self.model.modList]
-        if not mods or all(mod.group == name for mod in mods):
+    def modsMoved(self, names: list[str], group: str, position: int) -> None:
+        """Mods were dragged to a place in the list: under a separator ("" is Other mods), at position among the
+        mods already there. Only the list's own order changes; the game's load order stays as it is."""
+        names = [name for name in names if name in self.model.modList]
+        if not names:
             return
-        for mod in mods:
-            mod.group = name
+        order = arrange(self.treeWidget.namesIn(group), names, position)
+        for index, name in enumerate(order):
+            mod = self.model.modList.get(name)
+            if mod is not None:
+                mod.group = group
+                mod.listorder = index + 1
+        data.getConfig().listsort = "custom"
         self.saveGroups(orderedGroups(data.getConfig().groups, self.model.all()))
+
+    def sortByMyOrder(self) -> None:
+        """Shows the mod list in the order the mods were dragged into, instead of sorted by a column"""
+        data.getConfig().listsort = "custom"
+        self.refreshList()
+
+    def listSortChanged(self, column: int, _order) -> None:
+        data.getConfig().listsort = "custom" if column < 0 else ""
 
     def separatorDroppedOnSeparator(self, dragged: str, target: str) -> None:
         """A separator was dragged onto another one, and takes its place (onto Other mods: goes last)"""

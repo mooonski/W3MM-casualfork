@@ -57,6 +57,19 @@ def moveGroup(order: list[str], name: str, offset: int) -> list[str]:
     return result
 
 
+def listKey(mod: Mod) -> tuple[int, str]:
+    """Sorts mods into the user's own order: numbered ones first, then the rest A to Z"""
+    return (mod.listorder if mod.listorder > 0 else 1 << 30, mod.name.casefold())
+
+
+def arrange(shown: list[str], moved: list[str], position: int) -> list[str]:
+    """The names as shown, with the moved ones taken out and put back together at position among the others
+    (-1: at the end)"""
+    others = [name for name in shown if name not in moved]
+    index = len(others) if position < 0 else max(0, min(position, len(others)))
+    return others[:index] + list(moved) + others[index:]
+
+
 def uniqueName(base: str, taken: Iterable[str]) -> str:
     '''base, or "base 2", "base 3"... whichever isn't taken yet'''
     taken = set(taken)

@@ -181,7 +181,7 @@ class SeparatorTests(unittest.TestCase):
 
         with patch("src.gui.main_widget.QMenu", Menu):
             CustomMainWidget.openMenu(widget, QPoint(5, 5))
-        self.assertEqual([action.text() for action in shown[0].actions()], ["Add Separator"])
+        self.assertEqual([action.text() for action in shown[0].actions()], ["Add Separator", "Sort by My Order"])
         shown[0].actions()[0].trigger()
         widget.addSeparator.assert_called_once()
 

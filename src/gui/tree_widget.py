@@ -75,35 +75,89 @@ def groupOf(item: QTreeWidgetItem | None) -> str | None:
 
 
 class ModTree(QTreeWidget):
-    """The mod list. With separators shown, selected mods can be dragged onto a separator (or a mod under it) to
-    move them there, and a separator onto another one to take its place. The owner does the moving and fills the
-    list again; files dragged in from outside are left to the window, which installs them."""
+    """The mod list. Selected mods can be dragged to a new place: between two mods to put them there, or onto a
+    separator to put them at its end; a separator dragged onto another one takes its place. Only the list's own
+    order changes, never the game's load order. The owner does the moving and fills the list again; files dragged
+    in from outside are left to the window, which installs them."""
 
-    modsDropped = Signal(list, str)  # mod names, separator ("" = none)
+    modsMoved = Signal(list, str, int)  # mod names, separator ("" = none), place among its other mods (-1: end)
     separatorDropped = Signal(str, str)  # dragged separator, separator it was dropped on
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
-        self.setDragDropOverwriteMode(True)  # drops land on a row, never between rows
+        self.setDragDropOverwriteMode(False)  # drops can land between rows
         self.setDropIndicatorShown(True)
-        self.setDragEnabled(False)  # turned on while there are separators
+        self.setDragEnabled(True)
 
     def dropEvent(self, event) -> None:
         if event.source() is not self:
             event.ignore()
             return
-        target = groupOf(self.itemAt(event.position().toPoint()))
+        item = self.itemAt(event.position().toPoint())
+        where = self.dropIndicatorPosition()
         # the list is filled again afterwards, so Qt mustn't move the rows itself
         event.setDropAction(Qt.DropAction.IgnoreAction)
         event.accept()
-        if target is None:
-            return
-        dragged = self.selectedItems()
-        mods = [item.text(1) for item in dragged if not isGroupItem(item)]
-        headings = [item.data(0, GROUP_ROLE) for item in dragged if isGroupItem(item) and item.data(0, GROUP_ROLE)]
+        selected = {id(row) for row in self.selectedItems()}
+        mods = [row.text(1) for row in self.modRows() if id(row) in selected]
+        headings = [
+            row.data(0, GROUP_ROLE) for row in self.selectedItems() if isGroupItem(row) and row.data(0, GROUP_ROLE)
+        ]
         if mods:
-            self.modsDropped.emit(mods, target)
-        elif headings and headings[0] != target:
-            self.separatorDropped.emit(headings[0], target)
+            target = self.modTarget(item, where, mods)
+            if target is not None:
+                self.modsMoved.emit(mods, *target)
+        elif headings:
+            group = groupOf(item)
+            if group is not None and group != headings[0]:
+                self.separatorDropped.emit(headings[0], group)
+
+    def headings(self) -> list:
+        return [self.topLevelItem(i) for i in range(self.topLevelItemCount()) if isGroupItem(self.topLevelItem(i))]
+
+    def modRows(self) -> list:
+        """The mod rows in the order they are shown"""
+        rows = []
+        for index in range(self.topLevelItemCount()):
+            item = self.topLevelItem(index)
+            if isGroupItem(item):
+                rows += [item.child(child) for child in range(item.childCount())]
+            else:
+                rows.append(item)
+        return rows
+
+    def namesIn(self, group: str) -> list[str]:
+        """The mods shown under a separator ("" is Other mods, or the whole list without separators)"""
+        for heading in self.headings():
+            if heading.data(0, GROUP_ROLE) == group:
+                return [heading.child(i).text(1) for i in range(heading.childCount())]
+        return [row.text(1) for row in self.modRows()] if not self.headings() and not group else []
+
+    def modTarget(self, item, where, moved: list[str]) -> tuple[str, int] | None:
+        """(separator, place among its other mods) for mods dropped at this row"""
+        Position = QAbstractItemView.DropIndicatorPosition
+        if item is None:
+            return ("", -1)  # below everything: the end of the last group
+        if isGroupItem(item):
+            group = item.data(0, GROUP_ROLE)
+            if where == Position.AboveItem:
+                headings = self.headings()
+                index = headings.index(item)
+                if index > 0:
+                    return (headings[index - 1].data(0, GROUP_ROLE), -1)
+                return (group, 0)
+            if where == Position.BelowItem and item.isExpanded():
+                return (group, 0)
+            return (group, -1)
+        group = groupOf(item)
+        if group is None:
+            group = ""  # a list without separators
+        if item.text(1) in moved:
+            return None  # dropped onto itself
+        others = [name for name in self.namesIn(group) if name not in moved]
+        position = others.index(item.text(1)) if item.text(1) in others else len(others)
+        if where in (Position.BelowItem, Position.OnItem):
+            position += 1
+        return (group, position)

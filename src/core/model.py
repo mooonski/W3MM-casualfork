@@ -164,6 +164,10 @@ class Model:
             mod.enabled = False
         mod.name = str(root.get('name'))
         mod.group = str(root.get('group') or '')
+        try:
+            mod.listorder = int(root.get('listorder') or 0)
+        except ValueError:
+            mod.listorder = 0
         prt = str(root.get('priority'))
         if prt != 'Not Set':
             mod.priority = prt
@@ -231,6 +235,8 @@ class Model:
         elem.set('priority', mod.priority)
         if mod.group:
             elem.set('group', mod.group)
+        if mod.listorder:
+            elem.set('listorder', str(mod.listorder))
         if mod.files:
             for file in mod.files:
                 XML.SubElement(elem, 'data').text = file

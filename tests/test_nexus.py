@@ -423,6 +423,7 @@ class UpdaterTests(unittest.TestCase):
     def test_update_replaces_files_and_keeps_entry_state_and_settings(self):
         mod = self.installV1(priority=3)
         mod.group = "Visuals"
+        mod.listorder = 2
         result = ModUpdater(self.model).update(
             mod,
             self.package("v2", "v2", options="OptionA=1,OptionB=2"),
@@ -433,6 +434,7 @@ class UpdaterTests(unittest.TestCase):
         updated = Model(ignorelock=True).get("Example")
         self.assertEqual(updated.priority, "3")
         self.assertEqual(updated.group, "Visuals")
+        self.assertEqual(updated.listorder, 2)
         self.assertTrue(updated.enabled)
         self.assertEqual((updated.nexus.fileId, updated.nexus.version, updated.nexus.archive), (2, "2.0", "v2.zip"))
         self.assertEqual(self.asset(), "v2")
@@ -514,6 +516,9 @@ class UpdaterTests(unittest.TestCase):
         self.model.write()
         self.assertEqual(Model(ignorelock=True).get("Example").nexus, mod.nexus)
         self.assertEqual(Model(ignorelock=True).get("Example").group, 'Quests & "Story" 100%')
+        mod.listorder = 3
+        self.model.write()
+        self.assertEqual(Model(ignorelock=True).get("Example").listorder, 3)
         mod.nexus = None
         self.model.write()
         self.assertIsNone(Model(ignorelock=True).get("Example").nexus)

@@ -215,7 +215,7 @@ class GroupListTests(unittest.TestCase):
         self.assertTrue(actions["Move Separator Down"])
         ungrouped = QMenu()
         CustomMainWidget.fillGroupMenu(self.widget, ungrouped, "")
-        self.assertEqual([action.text() for action in ungrouped.actions()], ["Add Separator"])
+        self.assertEqual([action.text() for action in ungrouped.actions()], ["Add Separator", "Sort by My Order"])
 
     def test_group_item(self):
         item = GroupItem("Visuals", 0)

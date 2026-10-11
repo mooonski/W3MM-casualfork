@@ -38,6 +38,7 @@ class Mod:
     inis: List[str] = field(default_factory=list)
     nexus: Optional[NexusInfo] = None
     group: str = ''  # the group it is shown under in the mod list
+    listorder: int = 0  # its place under that group when the list is in the user's own order (0: last, A to Z)
 
     def __post_init__(self):
         self.date = strftime("%Y-%m-%d %H:%M:%S", gmtime())

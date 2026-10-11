@@ -274,6 +274,16 @@ class Configuration:
     def collapsedgroups(self, value: list[str]):
         self.set('GROUPS', 'collapsed', json.dumps(sorted(set(value))).replace('%', '%%'))
 
+    @property
+    def listsort(self) -> str:
+        """ "custom" while the mod list shows the user's own order instead of being sorted by a column"""
+        return self.get('GROUPS', 'sort', '') or ''
+
+    @listsort.setter
+    def listsort(self, value: str):
+        if value != self.listsort:
+            self.set('GROUPS', 'sort', value)
+
     def _jsonList(self, section: str, option: str) -> list[str]:
         try:
             value = json.loads(self.get(section, option, '[]') or '[]')
