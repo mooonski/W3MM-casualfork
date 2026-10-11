@@ -220,6 +220,18 @@ def openUrl(url: str):
     webbrowser.open(url)
 
 
+def openTextFile(path: str):
+    """Opens a game config file (input.xml, *.settings) in a text editor. Windows would otherwise use whatever
+    program owns the extension, often a browser for .settings, which can't show them."""
+    if sys.platform == "win32" and os.path.isfile(path):
+        try:
+            subprocess.Popen(["notepad.exe", os.path.normpath(path)])
+            return
+        except OSError:
+            pass
+    openFile(path)
+
+
 def openFile(path: str):
     from src.gui.alerts import MessageCouldntOpenFile
 
