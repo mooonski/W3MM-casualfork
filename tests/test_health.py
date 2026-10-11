@@ -110,7 +110,7 @@ class HealthGuiTests(unittest.TestCase):
         issues = [Issue(ERROR, "A", "Mod folder is missing", "Mods/modA"), Issue(INFO, "", "Note", "x", "https://n/1")]
         refresh = Mock(return_value=[])
         dialog = HealthDialog(None, issues, refresh)
-        self.assertIn("1 problems, 0 warnings, 1 notes", dialog.heading.text())
+        self.assertIn("1 problem, 0 warnings, 1 note", dialog.heading.text())
         rows = [dialog.tree.topLevelItem(i) for i in range(dialog.tree.topLevelItemCount())]
         self.assertEqual(
             [(row.text(0), row.text(2)) for row in rows], [("Problem", "Mod folder is missing"), ("Note", "Note")]

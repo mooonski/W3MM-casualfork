@@ -23,7 +23,7 @@ from src.globals.constants import translate
 from src.gui.mod_preview import ModPreview
 from src.gui.nexus_dialogs import NexusWorker
 from src.gui.tree_widget import CustomTreeWidgetItem
-from src.util.util import openUrl
+from src.util.util import openUrl, plural
 
 PAGE_SIZE = 25
 SORT_OPTIONS = (
@@ -183,7 +183,7 @@ class BrowseWidget(QWidget):
                 item.setTextAlignment(column, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self.tree.addTopLevelItem(item)
         if self.total:
-            self.status.setText(f"{len(self.results)} " + translate("Browse", "of") + f" {self.total} " + "mods")
+            self.status.setText(f"{len(self.results)} " + translate("Browse", "of") + " " + plural(self.total, "mod"))
         else:
             self.status.setText(translate("Browse", "No mods found."))
         if self.tree.topLevelItemCount() and not self.tree.selectedItems():

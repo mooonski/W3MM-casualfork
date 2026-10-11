@@ -278,7 +278,7 @@ class GuiTests(unittest.TestCase):
             graphql.return_value.details.assert_called_once_with([13130])
             download.assert_called_once_with(NODE["thumbnailUrl"])
             worker.return_value.start.assert_called_once()
-            self.assertIn("Loading Nexus details for 1 mods", self.outputs())
+            self.assertIn("Loading Nexus details for 1 mod", self.outputs())
 
             worker.reset_mock()
             self.widget.nexusDetails.update({13130: ModDetails(13130, fetched=int(time.time()))})
@@ -295,7 +295,7 @@ class GuiTests(unittest.TestCase):
         self.assertTrue(Path(self.folder, "nexus_details.json").exists())
         self.widget.refreshList.assert_called_once()
         self.widget.updatePreview.assert_called_once()
-        self.assertIn("Loaded Nexus details for 1 mods", self.outputs())
+        self.assertIn("Loaded Nexus details for 1 mod", self.outputs())
 
     def test_remastered_report(self):
         mods = {
@@ -313,7 +313,7 @@ class GuiTests(unittest.TestCase):
         )
         self.assertIn("Possible Remastered versions: Old Mod (Remastered) (9)", issues[0].detail)
         self.assertEqual(dialog.call_args.kwargs["title"], "Remastered Versions")
-        self.assertIn("1 of 2 mods haven't been updated since Remastered", self.outputs())
+        self.assertIn("1 of 2 mods hasn't been updated since Remastered", self.outputs())
         self.widget.detailsFetched.assert_called_once_with(found, True)
 
     def test_check_remastered_work(self):

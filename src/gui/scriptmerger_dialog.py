@@ -1,7 +1,7 @@
 '''Script conflict dialogs'''
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtGui import QBrush
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -16,11 +16,13 @@ from PySide6.QtWidgets import (
 
 from src.core.scriptmerger import LEFTOVER, MERGED, NOT_MERGED, OUTDATED, ConflictReport, ScriptConflict
 from src.globals.constants import translate
+from src.gui.themes import statusColor
+from src.util.util import plural
 
 STATES = {
-    NOT_MERGED: ("Not merged", "#e5a050", 0),
-    OUTDATED: ("Merge out of date", "#e5a050", 1),
-    LEFTOVER: ("Old merge", "#a0a0a0", 2),
+    NOT_MERGED: ("Not merged", "warning", 0),
+    OUTDATED: ("Merge out of date", "warning", 1),
+    LEFTOVER: ("Old merge", "muted", 2),
     MERGED: ("Merged", "", 3),
 }
 
@@ -38,8 +40,11 @@ def summary(conflicts: list[ScriptConflict], limit: int = 6) -> str:
 def MessageAlertScriptConflicts(pending: list[ScriptConflict], scriptMergerFound: bool) -> QMessageBox.StandardButton:
     '''Asks to run Script Merger because some scripts need (re)merging'''
     text = (
-        f"{len(pending)} "
-        + translate("ScriptMerger", "script files need Script Merger:")
+        plural(len(pending), translate("ScriptMerger", "script file"))
+        + " "
+        + (translate("ScriptMerger", "needs") if len(pending) == 1 else translate("ScriptMerger", "need"))
+        + " "
+        + translate("ScriptMerger", "Script Merger:")
         + "\n\n"
         + summary(pending)
         + "\n\n"
@@ -88,8 +93,10 @@ class ScriptConflictsDialog(QDialog):
             about
             + "\n\n"
             + (
-                f"{conflicts} " + translate("ScriptMerger", "script conflicts") + f", {pending} "
-                + translate("ScriptMerger", "files need Script Merger.")
+                plural(conflicts, translate("ScriptMerger", "script conflict")) + ", "
+                + plural(pending, translate("ScriptMerger", "file")) + " "
+                + (translate("ScriptMerger", "needs") if pending == 1 else translate("ScriptMerger", "need"))
+                + " " + translate("ScriptMerger", "Script Merger.")
                 if report.conflicts
                 else translate("ScriptMerger", "No scripts are changed by more than one enabled mod.")
             )
@@ -121,7 +128,7 @@ class ScriptConflictsDialog(QDialog):
             )
             item.setToolTip(1, "\n".join(conflict.mods))
             if color:
-                item.setForeground(2, QBrush(QColor(color)))
+                item.setForeground(2, QBrush(statusColor(color)))
             self.tree.addTopLevelItem(item)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)

@@ -581,3 +581,8 @@ def debounceGui(ms: int) -> Callable[[Callable[..., object]], Callable[..., QTim
         return debounced
 
     return decorator
+
+
+def plural(number: int, singular: str, many: str = '') -> str:
+    '''"1 mod", "2 mods"; pass many for irregular words'''
+    return f"{number} {singular if number == 1 else (many or singular + 's')}"

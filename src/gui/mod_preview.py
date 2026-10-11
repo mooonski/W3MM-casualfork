@@ -10,8 +10,9 @@ from PySide6.QtWidgets import QFrame, QLabel, QScrollArea, QSizePolicy, QVBoxLay
 from src.core.nexusdetails import ModDetails
 from src.domain.mod import Mod
 from src.globals.constants import translate
+from src.gui.themes import statusColor
 
-IMAGE_HEIGHT = 150
+IMAGE_HEIGHT = 130
 
 
 class ModPreview(QWidget):
@@ -42,7 +43,6 @@ class ModPreview(QWidget):
         self.meta.setWordWrap(True)
         self.warning = QLabel(content)
         self.warning.setWordWrap(True)
-        self.warning.setStyleSheet("color: #e5a050;")
         self.summary = QLabel(content)
         self.summary.setWordWrap(True)
         self.summary.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
@@ -95,6 +95,7 @@ class ModPreview(QWidget):
         self.meta.setText('  ·  '.join(part for part in parts if part))
         self.summary.setText(details.summary)
         self.link.setText(self.anchor(details.url))
+        self.warning.setStyleSheet(f"color: {statusColor('warning').name()};")  # follows theme changes
         if remastered and not details.updatedForRemastered:
             self.warning.setText(translate("Preview", "Not updated on Nexus since Remastered came out."))
 

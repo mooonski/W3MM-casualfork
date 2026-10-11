@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtGui import QBrush
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -39,6 +39,8 @@ from src.core.rmmr import ADD, LINK, SKIP, ImportPlan
 from src.core.updater import Backup
 from src.globals import data
 from src.globals.constants import translate
+from src.gui.themes import statusColor
+from src.util.util import plural
 
 
 class NexusWorker(QThread):
@@ -296,15 +298,20 @@ class RmmrImportDialog(QDialog):
         for warning in plan.warnings:
             label = QLabel(warning)
             label.setWordWrap(True)
-            label.setStyleSheet("color: #d08770; font-weight: bold;")
+            label.setStyleSheet(f"color: {statusColor('warning').name()}; font-weight: bold;")
             layout.addWidget(label)
         summary = QLabel(
             translate("Nexus", "RMMR's files are only read, never changed.")
             + "\n"
-            + f"{plan.count(ADD)} "
-            + translate("Nexus", "mods will be added")
+            + plural(plan.count(ADD), translate("Nexus", "mod"))
+            + " "
+            + translate("Nexus", "will be added")
             + f", {plan.count(LINK)} "
-            + translate("Nexus", "will get their Nexus ID")
+            + (
+                translate("Nexus", "will get its Nexus ID")
+                if plan.count(LINK) == 1
+                else translate("Nexus", "will get their Nexus IDs")
+            )
             + f", {plan.count(SKIP)} "
             + translate("Nexus", "skipped")
             + "."
@@ -416,7 +423,7 @@ class NexusFileDialog(QDialog):
             item.setToolTip(0, file.description or file.fileName)
             if not file.current:
                 for column in range(6):
-                    item.setForeground(column, QBrush(QColor("#a0a0a0")))
+                    item.setForeground(column, QBrush(statusColor("muted")))
             self.tree.addTopLevelItem(item)
         if self.files:
             self.tree.setCurrentItem(self.tree.topLevelItem(selected))

@@ -3,7 +3,7 @@
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtGui import QBrush
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -17,9 +17,10 @@ from PySide6.QtWidgets import (
 
 from src.core.health import ERROR, INFO, WARNING, Issue
 from src.globals.constants import translate
-from src.util.util import openUrl
+from src.gui.themes import statusColor
+from src.util.util import openUrl, plural
 
-SEVERITIES = {ERROR: ("Problem", "#e06c6c"), WARNING: ("Warning", "#e5a050"), INFO: ("Note", "#a0a0a0")}
+SEVERITIES = {ERROR: ("Problem", "problem"), WARNING: ("Warning", "warning"), INFO: ("Note", "muted")}
 
 
 class HealthDialog(QDialog):
@@ -80,14 +81,15 @@ class HealthDialog(QDialog):
             self.heading.setText(translate("Health", "No problems found."))
         else:
             self.heading.setText(
-                f"{problems} " + translate("Health", "problems") + f", {warnings} "
-                + translate("Health", "warnings") + f", {notes} " + translate("Health", "notes") + ". "
+                plural(problems, translate("Health", "problem")) + ", "
+                + plural(warnings, translate("Health", "warning")) + ", "
+                + plural(notes, translate("Health", "note")) + ". "
                 + translate("Health", "Double-click a row with a link to open it.")
             )  # fmt: skip
         for issue in issues:
             label, color = SEVERITIES[issue.severity]
             item = QTreeWidgetItem([translate("Health", label), issue.mod, issue.problem, issue.detail])
-            item.setForeground(0, QBrush(QColor(color)))
+            item.setForeground(0, QBrush(statusColor(color)))
             item.setToolTip(3, issue.detail + (f"\n{issue.url}" if issue.url else ""))
             item.setData(0, Qt.ItemDataRole.UserRole, issue.url)
             self.tree.addTopLevelItem(item)

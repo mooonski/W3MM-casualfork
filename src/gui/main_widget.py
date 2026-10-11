@@ -20,7 +20,7 @@ from PySide6.QtCore import (
     QThread,
     Signal,
 )
-from PySide6.QtGui import QAction, QActionGroup, QBrush, QColor, QCursor, QKeyEvent, QResizeEvent
+from PySide6.QtGui import QAction, QActionGroup, QBrush, QCursor, QKeyEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -96,7 +96,7 @@ from src.gui.nexus_dialogs import (
     statusText,
 )
 from src.gui.scriptmerger_dialog import MessageAlertScriptConflicts, ScriptConflictsDialog
-from src.gui.themes import get_dark_palette, get_light_palette, get_system_palette
+from src.gui.themes import get_dark_palette, get_light_palette, get_system_palette, statusColor
 from src.gui.tree_widget import CustomTreeWidgetItem
 from src.util.syntax import *
 from src.util.util import *
@@ -1173,8 +1173,8 @@ class CustomMainWidget(QWidget):
         self.refreshLoadOrder()
         self.output(
             (translate("MainWindow", "Enabled") if enabled else translate("MainWindow", "Disabled"))
-            + f" {changed} "
-            + translate("MainWindow", "mods")
+            + " "
+            + plural(changed, translate("MainWindow", "mod"))
         )
         self.alertRunScriptMerger()
         return changed
@@ -1275,7 +1275,11 @@ class CustomMainWidget(QWidget):
             return results
 
         self.output(
-            translate("MainWindow", "Checking") + f" {len(checked)} " + translate("MainWindow", "mods on Nexus...")
+            translate("MainWindow", "Checking")
+            + " "
+            + plural(len(checked), "mod")
+            + " "
+            + translate("MainWindow", "on Nexus...")
         )
         self.runNexus(work, lambda results: self.updatesChecked(checked, results))
 
@@ -1341,9 +1345,10 @@ class CustomMainWidget(QWidget):
         failed = sum(1 for row in rows if row.check.state == FAILED)
         self.output(
             "> "
-            + f"{available} "
-            + translate("MainWindow", "updates available")
-            + (f" ({failed} " + translate("MainWindow", "errors") + ")" if failed else "")
+            + plural(available, translate("MainWindow", "update"))
+            + " "
+            + translate("MainWindow", "available")
+            + (f" ({plural(failed, translate('MainWindow', 'error'))})" if failed else "")
         )
         for row in rows:
             if row.check.state == FAILED:
@@ -1440,11 +1445,9 @@ class CustomMainWidget(QWidget):
         self.output(
             "> "
             + translate("MainWindow", "Updated")
-            + f" {updated} "
-            + translate("MainWindow", "mods")
-            + f" ({failed} "
-            + translate("MainWindow", "errors")
-            + ")"
+            + " "
+            + plural(updated, translate("MainWindow", "mod"))
+            + f" ({plural(failed, translate('MainWindow', 'error'))})"
             + (f" ({incomplete} " + translate("MainWindow", "incomplete") + ")" if incomplete else "")
         )
         if incomplete:
@@ -1879,7 +1882,7 @@ class CustomMainWidget(QWidget):
         )
         self.detailsWorker = worker
         if not silent:
-            self.output(translate("MainWindow", "Loading Nexus details for") + f" {len(modIds)} " + "mods...")
+            self.output(translate("MainWindow", "Loading Nexus details for") + " " + plural(len(modIds), "mod") + "...")
         worker.start()
 
     def detailsFetched(self, found: dict, silent: bool) -> None:
@@ -1891,7 +1894,7 @@ class CustomMainWidget(QWidget):
         self.refreshList()
         self.updatePreview()
         if not silent:
-            self.output(translate("MainWindow", "Loaded Nexus details for") + f" {len(found)} " + "mods")
+            self.output(translate("MainWindow", "Loaded Nexus details for") + " " + plural(len(found), "mod"))
 
     def checkRemastered(self) -> None:
         '''Lists mods not updated on Nexus since Remastered came out, with other versions that were'''
@@ -1920,7 +1923,11 @@ class CustomMainWidget(QWidget):
         worker.finished.connect(lambda: self.setProgress(0))
         self.detailsWorker = worker
         self.output(
-            translate("MainWindow", "Checking") + f" {len(mods)} " + translate("MainWindow", "mods for Remastered...")
+            translate("MainWindow", "Checking")
+            + " "
+            + plural(len(mods), "mod")
+            + " "
+            + translate("MainWindow", "for Remastered...")
         )
         worker.start()
 
@@ -1963,12 +1970,17 @@ class CustomMainWidget(QWidget):
                     mods[modId].nexus.url,
                 )
             )
+        outdated = len([issue for issue in issues if issue.severity == WARNING])
         self.output(
             "> "
-            + f"{len([issue for issue in issues if issue.severity == WARNING])} "
+            + f"{outdated} "
             + translate("MainWindow", "of")
-            + f" {len(mods)} "
-            + translate("MainWindow", "mods haven't been updated since Remastered")
+            + " "
+            + plural(len(mods), translate("MainWindow", "mod"))
+            + " "
+            + (translate("MainWindow", "hasn't") if outdated == 1 else translate("MainWindow", "haven't"))
+            + " "
+            + translate("MainWindow", "been updated since Remastered")
         )
         HealthDialog(self, issues, title=translate("MainWindow", "Remastered Versions")).exec()
 
@@ -2076,7 +2088,7 @@ class CustomMainWidget(QWidget):
                     self.modCategory(mod),
                 )
                 if mod.name in duplicates:
-                    row.setForeground(1, QBrush(QColor("#e5a050")))
+                    row.setForeground(1, QBrush(statusColor("warning")))
                     row.setToolTip(
                         1,
                         translate("MainWindow", "Installed twice?")
@@ -2330,8 +2342,13 @@ class CustomMainWidget(QWidget):
         if issues:
             self.output(
                 translate("MainWindow", "Health check:")
-                + f" {len(issues)} "
-                + translate("MainWindow", "problems or warnings (Mods > Health Check...)")
+                + " "
+                + plural(
+                    len(issues),
+                    translate("MainWindow", "problem or warning"),
+                    translate("MainWindow", "problems or warnings"),
+                )
+                + " (Mods > Health Check...)"
             )
 
     def changeTheme(self, theme):

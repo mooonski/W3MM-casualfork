@@ -9,6 +9,7 @@ from src.core.nexus import UP_TO_DATE, UPDATE_AVAILABLE, ModFiles, NexusFile, Ne
 from src.domain.mod import Mod
 from src.gui.main_widget import CustomMainWidget
 from src.gui.nexus_dialogs import RECORD, SWITCH, NexusFileDialog
+from src.gui.themes import statusColor
 
 
 def file(fileId, category="MAIN", uploaded=100, name=None, version="1.0", size=2 * 1048576):
@@ -50,7 +51,7 @@ class DialogTests(unittest.TestCase):
         )
         self.assertEqual(dialog.selected().fileId, 2)
         greyed = dialog.tree.topLevelItem(3).foreground(0).color().name()
-        self.assertEqual(greyed, "#a0a0a0")
+        self.assertEqual(greyed, statusColor("muted").name())
         self.assertEqual(dialog.tree.topLevelItem(0).toolTip(0), "notes")
 
     def test_guess_unknown_and_empty(self):

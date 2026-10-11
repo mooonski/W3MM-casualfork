@@ -152,7 +152,7 @@ class UpdatesCheckedTests(HandlerTestCase):
         learned = self.widget.model.modList["A"].nexus
         self.assertEqual((learned.fileId, learned.version, learned.archive), (1, "1.0", "A 5 1.0 x.zip"))
         self.widget.model.write.assert_called_once()
-        self.assertIn("1 updates available (1 errors)", self.outputs())
+        self.assertIn("1 update available (1 error)", self.outputs())
         self.assertIn("B: hidden", self.outputs())
         rows = dialog.call_args.args[1]
         self.assertEqual([row.name for row in rows], ["A", "B"])
@@ -239,7 +239,7 @@ class ApplyUpdatesTests(HandlerTestCase):
         self.assertEqual(self.widget.updateChecks["A"].state, UP_TO_DATE)
         self.assertNotIn("B", self.widget.updateChecks)
         self.assertIn("C: download failed", self.outputs())
-        self.assertIn("Updated 1 mods (2 errors) (1 incomplete)", self.outputs())
+        self.assertIn("Updated 1 mod (2 errors) (1 incomplete)", self.outputs())
         incomplete.assert_called_once()
         self.widget.alertRunScriptMerger.assert_called_once()
         self.widget.refreshList.assert_called()
