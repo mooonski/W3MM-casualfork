@@ -25,6 +25,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QAction, QActionGroup, QBrush, QCursor, QKeyEvent, QPalette, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QFileDialog,
     QFileIconProvider,
     QHBoxLayout,
@@ -89,7 +90,7 @@ from src.core.nexus import (
     uniquePath,
 )
 from src.core.nexusdetails import DetailsCache, ModDetails, NexusGraphQL, remasteredSuggestions
-from src.core.nxm import NxmLink, NxmRegistration, WindowsRegistry, forward, parseNxm
+from src.core.nxm import NxmLink, NxmRegistration, WindowsRegistry, forward, handlerName, parseNxm
 from src.core.requirements import EXTERNAL, missingRequirements
 from src.core.rmmr import RmmrError, applyImport, isRmmrFolder, planImport
 from src.core.saves import SaveBackup, backupSaves, gameSavesFolder, listSaveBackups, restoreSaves
@@ -233,6 +234,7 @@ class CustomMainWidget(QWidget):
         self.reportDuplicates()
         self.detectScriptMerger()
         self.reportHealth()
+        QTimer.singleShot(1500, self.checkNxmHandler)
         self.refreshNexusDetails(silent=True, onlyMissing=True)
         self.refreshEndorsements()
 
@@ -247,9 +249,13 @@ class CustomMainWidget(QWidget):
         self.actionKeepArchives.setChecked(data.getConfig().keeparchives == "1")
         self.actionBackupSaves.setChecked(data.getConfig().backupsaves == "1")
         self.actionHandleNxm.setEnabled(platform == "win32")
+        self.actionDefaultNxm.setEnabled(platform == "win32")
         if platform == "win32":
             try:
-                self.actionHandleNxm.setChecked(self.nxmRegistration().isRegistered())
+                registered = self.nxmRegistration().isRegistered()
+                self.actionHandleNxm.setChecked(registered)
+                if registered and not data.getConfig().nxmwanted:
+                    data.getConfig().nxmwanted = "1"  # turned on before the choice was remembered
             except OSError:
                 pass
 
@@ -526,6 +532,8 @@ class CustomMainWidget(QWidget):
         )
         self.actionSaveBackups.triggered.connect(self.showSaveBackups)
         self.actionHandleNxm.triggered.connect(self.handleNxmChanged)
+        self.actionDefaultNxm.triggered.connect(self.makeDefaultNxmHandler)
+        self.menuNexus.aboutToShow.connect(self.showNxmState)
         self.actionSetApiKey.triggered.connect(lambda: askApiKey(self))
         self.actionChangeArchiveFolder.triggered.connect(self.changeArchiveFolder)
         self.actionChangeBackupFolder.triggered.connect(self.changeBackupFolder)
@@ -2126,6 +2134,8 @@ class CustomMainWidget(QWidget):
         try:
             if self.actionHandleNxm.isChecked():
                 registration.register()
+                data.getConfig().nxmwanted = "1"
+                data.getConfig().nxmnoask = ""
                 previous = registration.previous()
                 self.output(
                     translate("MainWindow", "Nexus links (nxm://) now open here.")
@@ -2136,6 +2146,7 @@ class CustomMainWidget(QWidget):
                     )
                 )
             elif registration.unregister():
+                data.getConfig().nxmwanted = "0"
                 self.output(translate("MainWindow", "Nexus links open with the previous program again."))
             else:
                 self.output(
@@ -2147,6 +2158,81 @@ class CustomMainWidget(QWidget):
         except OSError as error:
             self.output(translate("MainWindow", "Could not change the Nexus link handler:") + f" {error}")
             self.actionHandleNxm.setChecked(registration.isRegistered())
+
+    def showNxmState(self) -> None:
+        """Ticks Handle Nexus Links only while the links really open here (another program may have taken them)"""
+        if platform != "win32":
+            return
+        try:
+            self.actionHandleNxm.setChecked(self.nxmRegistration().isRegistered())
+        except OSError:
+            pass
+
+    def makeDefaultNxmHandler(self) -> None:
+        """Opens Nexus links here again, whichever program has them now"""
+        registration = self.nxmRegistration()
+        try:
+            current = registration.registry.get()
+            if registration.isRegistered():
+                self.output(translate("MainWindow", "Nexus links already open in W3MM."))
+                return
+            registration.register()
+        except OSError as error:
+            self.output(translate("MainWindow", "Could not change the Nexus link handler:") + f" {error}")
+            return
+        data.getConfig().nxmwanted = "1"
+        data.getConfig().nxmnoask = ""
+        self.actionHandleNxm.setChecked(True)
+        previous = registration.previous()
+        self.output(
+            translate("MainWindow", "Nexus links open in W3MM again")
+            + (f" ({translate('MainWindow', 'they were going to')} {handlerName(current)})" if current else "")
+            + ". "
+            + (
+                translate("MainWindow", "Links for other games are passed to") + f" {handlerName(previous)}."
+                if previous
+                else ""
+            )
+        )
+
+    def checkNxmHandler(self) -> None:
+        """At startup: if the user chose W3MM for Nexus links and another program has taken them since, offers to
+        take them back (with an option to stop asking)"""
+        config = data.getConfig()
+        if platform != "win32" or config.nxmwanted != "1" or config.nxmnoask == "1":
+            return
+        registration = self.nxmRegistration()
+        try:
+            if registration.isRegistered():
+                return
+            current = registration.registry.get()
+        except OSError:
+            return
+        other = handlerName(current)
+        self.actionHandleNxm.setChecked(False)
+        self.output(translate("MainWindow", "Nexus links now open with") + f" {other}.")
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(translate("MainWindow", "Nexus links"))
+        box.setText(
+            translate("MainWindow", "Nexus \"Mod Manager Download\" links now open with")
+            + f" {other}.\n\n"
+            + translate("MainWindow", "Open them in W3MM again? Links for other games will still go to")
+            + f" {other}."
+        )
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.Yes)
+        noAsk = QCheckBox(translate("MainWindow", "Don't ask again"), box)
+        box.setCheckBox(noAsk)
+        answer = box.exec()
+        if noAsk.isChecked():
+            config.nxmnoask = "1"
+        if answer == QMessageBox.StandardButton.Yes:
+            self.makeDefaultNxmHandler()
+        elif noAsk.isChecked():
+            self.output(
+                translate("MainWindow", "Nexus > Make W3MM the Default for Nexus Links takes them back any time.")
+            )
 
     def openNexusDownload(self, modId: int, fileId: int, name: str) -> None:
         '''Opens the website's download for a file, for accounts that can't download directly'''
@@ -3496,6 +3582,9 @@ class CustomMainWidget(QWidget):
         self.actionHandleNxm.setCheckable(True)
         self.actionHandleNxm.setObjectName("actionHandleNxm")
 
+        self.actionDefaultNxm = QAction(self.mainWindow)
+        self.actionDefaultNxm.setObjectName("actionDefaultNxm")
+
         self.actionSetApiKey = QAction(self.mainWindow)
         self.actionSetApiKey.setObjectName("actionSetApiKey")
 
@@ -3630,6 +3719,7 @@ class CustomMainWidget(QWidget):
         self.menuNexus.addAction(self.actionChangeArchiveFolder)
         self.menuNexus.addAction(self.actionKeepArchives)
         self.menuNexus.addAction(self.actionHandleNxm)
+        self.menuNexus.addAction(self.actionDefaultNxm)
         self.menuNexus.addAction(self.actionChangeBackupFolder)
         self.menuNexus.addAction(self.actionBackupSaves)
 
@@ -3833,6 +3923,13 @@ class CustomMainWidget(QWidget):
         self.actionSetApiKey.setText(translate("MainWindow", "Set API Key..."))
         self.actionChangeArchiveFolder.setText(translate("MainWindow", "Change Download Folder..."))
         self.actionKeepArchives.setText(translate("MainWindow", "Keep Copies of Installed Archives"))
+        self.actionDefaultNxm.setText(translate("MainWindow", "Make W3MM the Default for Nexus Links"))
+        self.actionDefaultNxm.setToolTip(
+            translate(
+                "MainWindow",
+                "Take Nexus links back from another mod manager; links for other games are passed on to it",
+            )
+        )
         self.actionHandleNxm.setText(translate("MainWindow", "Handle Nexus Links (Mod Manager Download)"))
         self.actionHandleNxm.setToolTip(
             translate(

@@ -301,6 +301,24 @@ class Configuration:
         self.set('SETTINGS', 'backupsaves', value)
 
     @property
+    def nxmwanted(self) -> str:
+        """ "1" when the user chose to open Nexus links here, "0" when they gave them back, "" if never asked"""
+        return self.get('NEXUS', 'handlelinks', '') or ''
+
+    @nxmwanted.setter
+    def nxmwanted(self, value: str):
+        self.set('NEXUS', 'handlelinks', value)
+
+    @property
+    def nxmnoask(self) -> str:
+        """ "1" to stop asking at startup when another program has taken the Nexus links"""
+        return self.get('NEXUS', 'noaskhandler', '') or ''
+
+    @nxmnoask.setter
+    def nxmnoask(self, value: str):
+        self.set('NEXUS', 'noaskhandler', value)
+
+    @property
     def previousnxm(self) -> str:
         '''The nxm:// handler command that was registered before this program took over'''
         return self.get('NEXUS', 'previousnxm', '') or ''

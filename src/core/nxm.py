@@ -66,6 +66,29 @@ def splitCommand(command: str, url: str) -> list[str]:
     return [program] + replaced
 
 
+# mod managers that also handle nxm links, by their program file
+KNOWN_HANDLERS = {
+    'vortex.exe': 'Vortex',
+    'modorganizer.exe': 'Mod Organizer 2',
+    'nxmhandler.exe': 'Mod Organizer 2',
+    'zcom-mod-manager.exe': 'ZCOM Mod Manager',
+    'relapsesmodmanagerredux.exe': "Relapse's Mod Manager Redux",
+    'nexusmodsapp.exe': 'the Nexus Mods app',
+    'nexusmods.app.exe': 'the Nexus Mods app',
+}
+
+
+def handlerName(command: str) -> str:
+    """A readable name for the program a nxm handler command runs"""
+    if not command:
+        return 'no program'
+    if command.rstrip().endswith('--nxm "%1"'):
+        return 'another copy of W3MM'
+    arguments = splitCommand(command, '')
+    program = os.path.basename(arguments[0]) if arguments else command
+    return KNOWN_HANDLERS.get(program.casefold(), program)
+
+
 def forward(command: str, url: str) -> bool:
     '''Opens url with another program's handler command'''
     arguments = splitCommand(command, url)
