@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
 from watchdog.events import DirModifiedEvent, FileModifiedEvent, PatternMatchingEventHandler
 from watchdog.observers import Observer
 
+from src.core.archives import IN_USE, moveToFolder, recycle, scanArchives
 from src.core.duplicates import duplicateEntries, matchingEntries, versionNote
 from src.core.fetcher import isArchive
 from src.core.health import ERROR, INFO, WARNING, Issue, checkHealth
@@ -87,6 +88,7 @@ from src.gui.alerts import (
     MessageAlertIncompleteInstallation,
     MessageUnsupportedOSAction,
 )
+from src.gui.archives_dialog import RECYCLE, ArchiveCleanupDialog, sizeText
 from src.gui.browse_widget import BrowseWidget
 from src.gui.details_dialog import DetailsDialog
 from src.gui.health_dialog import HealthDialog
@@ -143,6 +145,10 @@ class ModsSettingsWatcher(QThread):
             self.observer.stop()
             self.observer.join()
             self.observer = None
+
+
+# archives moved away by Clean Up Archives go to this folder inside the archive folder
+OLD_ARCHIVES = "Old archives"
 
 
 class CustomMainWidget(QWidget):
@@ -461,6 +467,7 @@ class CustomMainWidget(QWidget):
         self.actionOpenNexusPage.triggered.connect(self.openNexusPage)
         self.actionEndorse.triggered.connect(self.endorseMods)
         self.actionDownloadHistory.triggered.connect(self.showDownloadHistory)
+        self.actionCleanUpArchives.triggered.connect(self.cleanUpArchives)
         self.actionRestoreBackup.triggered.connect(self.restoreBackup)
         self.actionImportRmmr.triggered.connect(self.importFromRmmr)
         self.actionRefreshDetails.triggered.connect(lambda: self.refreshNexusDetails())
@@ -2046,6 +2053,56 @@ class CustomMainWidget(QWidget):
         if not silent:
             self.output(translate("MainWindow", "Loaded Nexus details for") + " " + plural(len(found), "mod"))
 
+    def cleanUpArchives(self) -> None:
+        '''Lists archives in the archive folder that may not be needed and moves the ticked ones away'''
+        folder = data.getConfig().archives
+        if not folder or not path.isdir(folder):
+            self.output(translate("MainWindow", "The archive folder doesn't exist:") + f" {folder}")
+            return
+        tools = {nexusId(data.getConfig().gameversion): "Script Merger"}
+        try:
+            archives = scanArchives(folder, self.model, tools)
+        except OSError as error:
+            self.output(translate("MainWindow", "Couldn't read the archive folder:") + f" {error}")
+            return
+        if all(archive.state == IN_USE for archive in archives):
+            self.output(translate("MainWindow", "Nothing to clean up in") + f" {folder}")
+            return
+        dialog = ArchiveCleanupDialog(self, folder, archives, OLD_ARCHIVES)
+        if not dialog.exec() or not dialog.action:
+            return
+        chosen = dialog.selection()
+        size = sizeText(sum(archive.size for archive in chosen))
+        if dialog.action == RECYCLE:
+            answer = QMessageBox.question(
+                self,
+                translate("MainWindow", "Clean Up Archives"),
+                translate("MainWindow", "Move")
+                + f" {plural(len(chosen), translate('MainWindow', 'file'))} ({size}) "
+                + translate("MainWindow", "to the Recycle Bin?")
+                + "\n\n"
+                + translate("MainWindow", "They can be restored from there."),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            failed = recycle([archive.path for archive in chosen])
+            where = translate("MainWindow", "the Recycle Bin")
+        else:
+            where = path.join(folder, OLD_ARCHIVES)
+            failed = moveToFolder([archive.path for archive in chosen], where)
+        moved = len(chosen) - len(failed)
+        self.output(
+            "> "
+            + translate("MainWindow", "Moved")
+            + f" {plural(moved, translate('MainWindow', 'archive'))} "
+            + translate("MainWindow", "to")
+            + f" {where}"
+        )
+        for archivePath, error in failed:
+            self.output(f"  {path.basename(archivePath)}: {error}")
+
     def showDownloadHistory(self) -> None:
         self.downloadHistory.load()
         dialog = DownloadHistoryDialog(self, self.downloadHistory.entries)
@@ -2796,6 +2853,9 @@ class CustomMainWidget(QWidget):
         self.actionDownloadHistory = QAction(self.mainWindow)
         self.actionDownloadHistory.setObjectName("actionDownloadHistory")
 
+        self.actionCleanUpArchives = QAction(self.mainWindow)
+        self.actionCleanUpArchives.setObjectName("actionCleanUpArchives")
+
         self.actionRestoreBackup = QAction(self.mainWindow)
         self.actionRestoreBackup.setObjectName("actionRestoreBackup")
 
@@ -2939,6 +2999,7 @@ class CustomMainWidget(QWidget):
         self.menuNexus.addAction(self.actionOpenNexusPage)
         self.menuNexus.addAction(self.actionEndorse)
         self.menuNexus.addAction(self.actionDownloadHistory)
+        self.menuNexus.addAction(self.actionCleanUpArchives)
         self.menuNexus.addAction(self.actionRestoreBackup)
         self.menuNexus.addAction(self.actionImportRmmr)
         self.menuNexus.addSeparator()
@@ -3091,6 +3152,10 @@ class CustomMainWidget(QWidget):
         self.actionOpenNexusPage.setText(translate("MainWindow", "Open Nexus Page"))
         self.actionEndorse.setText(translate("MainWindow", "Endorse Mods..."))
         self.actionDownloadHistory.setText(translate("MainWindow", "Download History..."))
+        self.actionCleanUpArchives.setText(translate("MainWindow", "Clean Up Archives..."))
+        self.actionCleanUpArchives.setToolTip(
+            translate("MainWindow", "Find old versions and other archives you may not need in the archive folder")
+        )
         self.actionDownloadHistory.setToolTip(
             translate("MainWindow", "Files downloaded from Nexus, what became of them, and installing them again")
         )
