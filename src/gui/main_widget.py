@@ -57,6 +57,7 @@ from src.core.health import ERROR, INFO, WARNING, Issue, checkHealth
 from src.core.history import FAILED as DOWNLOAD_FAILED
 from src.core.history import INSTALLED, KEPT, LINK, UPDATE, UPDATED, WEBSITE, Download, DownloadHistory
 from src.core.installer import Installer
+from src.core.loadorder import moveFolder, prioritiesFor
 from src.core.model import Model
 from src.core.nexus import (
     ABSTAINED,
@@ -81,7 +82,15 @@ from src.core.nxm import NxmLink, NxmRegistration, WindowsRegistry, forward, par
 from src.core.requirements import EXTERNAL, missingRequirements
 from src.core.rmmr import RmmrError, applyImport, isRmmrFolder, planImport
 from src.core.saves import SaveBackup, backupSaves, gameSavesFolder, listSaveBackups, restoreSaves
-from src.core.scriptmerger import ConflictReport, analyse, findScriptMerger, installedVersion, isNewer, nexusId
+from src.core.scriptmerger import (
+    MERGED_FOLDER,
+    ConflictReport,
+    analyse,
+    findScriptMerger,
+    installedVersion,
+    isNewer,
+    nexusId,
+)
 from src.core.updater import ModUpdater
 from src.domain.mod import Mod
 from src.globals import data
@@ -97,6 +106,7 @@ from src.gui.details_dialog import DetailsDialog
 from src.gui.health_dialog import HealthDialog
 from src.gui.history_dialog import DownloadHistoryDialog
 from src.gui.icons import icon
+from src.gui.load_order_tree import LoadOrderTree
 from src.gui.mod_preview import ModPreview
 from src.gui.nexus_dialogs import (
     ENDORSE,
@@ -151,6 +161,14 @@ class ModsSettingsWatcher(QThread):
             self.observer = None
 
 
+def priorityNumber(value) -> int | None:
+    '''A priority from mods.settings as a number, or None when it has none'''
+    try:
+        return int(value) if value is not None and str(value).strip() != "" else None
+    except ValueError:
+        return None
+
+
 # archives moved away by Clean Up Archives go to this folder inside the archive folder
 OLD_ARCHIVES = "Old archives"
 
@@ -171,6 +189,7 @@ class CustomMainWidget(QWidget):
         self.downloadHistory = DownloadHistory(data.getConfig().configuration)
         self.detailsWorker: NexusWorker | None = None
         self.requirementsWorker: NexusWorker | None = None
+        self.loadOrderFocus = ""
 
         self.modsSettingsWatcher = ModsSettingsWatcher()
         # connect to a method so the refresh always runs on the GUI thread
@@ -348,7 +367,7 @@ class CustomMainWidget(QWidget):
         self.horizontalSplitter_tree.addWidget(self.treeWidget)
 
         # Load order tree widget
-        self.loadOrder = QTreeWidget(self.centralwidget)
+        self.loadOrder = LoadOrderTree(self.centralwidget)
         self.loadOrder.setUniformRowHeights(True)
         self.loadOrder.setAnimated(True)
         self.loadOrder.setHeaderHidden(False)
@@ -508,6 +527,7 @@ class CustomMainWidget(QWidget):
         self.treeWidget.header().setStretchLastSection(False)
 
         self.loadOrder.itemDoubleClicked.connect(self.loadOrderDoubleClicked)
+        self.loadOrder.moved.connect(self.loadOrderMoved)
 
         self.searchWidget.textChanged.connect(self.setSearchString)
 
@@ -2569,16 +2589,62 @@ class CustomMainWidget(QWidget):
                     dirlist = [directory[0], res]
                     item = CustomTreeWidgetItem(dirlist)
                     item.setTextAlignment(1, Qt.AlignmentFlag.AlignCenter)
+                    LoadOrderTree.draggable(
+                        item,
+                        not directory[0].startswith("~") and directory[0].casefold() != MERGED_FOLDER.casefold(),
+                    )
                     self.loadOrder.addTopLevelItem(item)
             for item in selected:
                 rows = self.loadOrder.findItems(item.replace("~", ""), Qt.MatchFlag.MatchEndsWith, 0)
                 if rows:
                     for row in rows:
                         row.setSelected(True)
+            # a mod just dragged to a new place stays selected there
+            if self.loadOrderFocus:
+                for row in self.loadOrder.findItems(self.loadOrderFocus, Qt.MatchFlag.MatchExactly, 0):
+                    self.loadOrder.setCurrentItem(row)
+                    self.loadOrder.scrollToItem(row)
+                self.loadOrderFocus = ""
         except Exception as err:
             self.output(translate("MainWindow", "Couldn't read or refresh load order: ") + f"{formatUserError(err)}")
             return err
         return None
+
+    def loadOrderMoved(self, folder: str, row: int) -> None:
+        '''A mod was dragged to a new place in the load order: sets priorities so the game loads it there'''
+        if folder.startswith("~"):
+            return
+        config = data.getConfig()
+        rows = [self.loadOrder.topLevelItem(i).text(0) for i in range(self.loadOrder.topLevelItemCount())]
+        others = [name for name in rows if name != folder]
+        index = sum(1 for name in others[:row] if not name.startswith("~"))
+        enabled = [name for name in rows if not name.startswith("~")]
+        order = moveFolder(enabled, folder, index)
+        current = {name: priorityNumber(config.getPriority(name)) for name in enabled}
+        wanted = prioritiesFor(order, current, folder)
+        changed = [name for name, value in wanted.items() if current.get(name) != value]
+        for name in changed:
+            config.setPriority(name, str(wanted[name]))
+        if not changed:
+            return
+        config.write_priority()
+        # the mod list shows each mod's priority too
+        for mod in self.model.all():
+            if mod.files and mod.files[0] in wanted:
+                mod._priority = str(wanted[mod.files[0]])
+        self.output(
+            translate("MainWindow", "Load order:")
+            + f" {folder} "
+            + translate("MainWindow", "now loads")
+            + f" {order.index(folder) + 1}. "
+            + "("
+            + plural(len(changed), translate("MainWindow", "priority"), translate("MainWindow", "priorities"))
+            + " "
+            + translate("MainWindow", "changed")
+            + ")"
+        )
+        self.loadOrderFocus = folder
+        self.refreshList()
 
     def setProgress(self, currentProgress):
         '''Sets the progress to currentProgress'''
@@ -3167,6 +3233,14 @@ class CustomMainWidget(QWidget):
         self.treeWidget.headerItem().setText(14, translate("MainWindow", "Category"))
 
         self.loadOrder.headerItem().setText(0, translate("MainWindow", "Load Order"))
+        self.loadOrder.headerItem().setToolTip(
+            0,
+            translate(
+                "MainWindow",
+                "The order the game loads mods in; the first one wins when mods change the same file. "
+                "Drag a mod to move it.",
+            ),
+        )
         self.loadOrder.headerItem().setText(1, translate("MainWindow", "Priority"))
 
         self.textEdit.setPlaceholderText(translate("MainWindow", "Output"))
