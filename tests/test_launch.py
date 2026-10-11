@@ -229,6 +229,8 @@ class StartupFailureTests(unittest.TestCase):
                 with (
                     patch("builtins.__import__", side_effect=without_qt),
                     patch("sys.stderr", stream),
+                    # without a console main.py keeps a log; keep it out of the real configuration folder
+                    patch.dict("os.environ", {"LOCALAPPDATA": directory}),
                     patch(
                         "tempfile.NamedTemporaryFile",
                         side_effect=lambda **kwargs: original_temporary_file(dir=directory, **kwargs),

@@ -30,7 +30,9 @@ def logStartupFailure(details: str) -> str | None:
 def logWithoutConsole(arguments: list[str]) -> str | None:
     '''Started without a console (pythonw or a shortcut), what the program prints would be lost, so it goes to
     W3MM.log in the configuration folder instead. The previous run's log is kept as W3MM.previous.log.'''
-    if sys.stdout is not None and sys.stderr is not None:
+    # pythonw may be given stand-in output streams that lead nowhere (e.g. through a virtual environment's launcher)
+    windowless = path.basename(sys.executable).lower() == "pythonw.exe"
+    if sys.stdout is not None and sys.stderr is not None and not windowless:
         return None
     import os
     import time
@@ -50,8 +52,11 @@ def logWithoutConsole(arguments: list[str]) -> str | None:
     except OSError:
         return None
     stream.write(f"started {time.strftime('%Y-%m-%d %H:%M:%S')}: {' '.join(arguments)}\n")
-    sys.stdout = sys.stdout or stream
-    sys.stderr = sys.stderr or stream
+    if windowless:
+        sys.stdout = sys.stderr = stream
+    else:
+        sys.stdout = sys.stdout or stream
+        sys.stderr = sys.stderr or stream
     return log
 
 

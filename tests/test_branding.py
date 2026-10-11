@@ -1,3 +1,4 @@
+import io
 import os
 import sys
 import tempfile
@@ -72,6 +73,17 @@ class LogTests(unittest.TestCase):
         self.assertEqual((first, second), (str(folder / "W3MM.log"),) * 2)
         self.assertIn("second run", (folder / "W3MM.log").read_text(encoding="utf-8"))
         self.assertIn("first run", (folder / "W3MM.previous.log").read_text(encoding="utf-8"))
+
+    def test_windowless_python_logs_even_with_stand_in_streams(self):
+        stand_in = io.StringIO()
+        sys.stdout = sys.stderr = stand_in
+        with patch.object(sys, "executable", r"C:\Python\pythonw.exe"):
+            log = main.logWithoutConsole(["main.py", "-c", str(self.root)])
+        print("from pythonw")
+        self.restore()
+        self.assertEqual(log, str(self.root / "W3MM.log"))
+        self.assertIn("from pythonw", (self.root / "W3MM.log").read_text(encoding="utf-8"))
+        self.assertEqual(stand_in.getvalue(), "")
 
     def test_config_override_keeps_its_own_log(self):
         sys.stdout = sys.stderr = None

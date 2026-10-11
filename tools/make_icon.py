@@ -1,4 +1,5 @@
-'''Builds res/w3mm-fork.ico: the W3MM wolf medallion on a crimson tile, at every size Windows uses.
+'''Builds res/w3mm-fork.ico from res/w3mm-fork-source.png (the red Witcher 3 claw marks on a light background):
+the background is made transparent, the logo cropped and centred, and drawn at every size Windows uses.
 
 Run with the project's Python: python tools/make_icon.py'''
 
@@ -6,47 +7,58 @@ import os
 import struct
 import sys
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QGuiApplication, QImage, QLinearGradient, QPainter, QPainterPath
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRect, Qt
+from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
-SOURCE = os.path.join(ROOT, 'res', 'w3a.ico')
+SOURCE = os.path.join(ROOT, 'res', 'w3mm-fork-source.png')
 TARGET = os.path.join(ROOT, 'res', 'w3mm-fork.ico')
+PREVIEW = os.path.join(ROOT, 'res', 'w3mm-fork.png')
 SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
 
 
-def render(size: int, wolf: QImage) -> QImage:
-    image = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
-    image.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(image)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-    # tile: deep crimson, lighter at the top, with a thin bright edge so it reads on dark and light taskbars
-    margin = max(0.5, size * 0.03)
-    tile = QRectF(margin, margin, size - 2 * margin, size - 2 * margin)
-    radius = size * 0.2
-    path = QPainterPath()
-    path.addRoundedRect(tile, radius, radius)
-    gradient = QLinearGradient(QPointF(0, tile.top()), QPointF(0, tile.bottom()))
-    gradient.setColorAt(0, QColor(176, 38, 34))
-    gradient.setColorAt(1, QColor(92, 14, 14))
-    painter.fillPath(path, gradient)
-    if size >= 24:
-        painter.setPen(QColor(232, 150, 120, 150))
-        painter.drawPath(path)
-    # the wolf, brightened so its silver shows against the red
-    inset = size * (0.08 if size <= 24 else 0.12)
-    target = tile.adjusted(inset, inset, -inset, -inset)
-    bright = wolf.convertToFormat(QImage.Format.Format_ARGB32)
-    lift = QPainter(bright)
-    lift.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceAtop)
-    lift.fillRect(bright.rect(), QColor(255, 244, 230, 70))
-    lift.end()
-    painter.drawImage(target, bright.scaled(int(target.width() * 2), int(target.height() * 2),
-                                            Qt.AspectRatioMode.KeepAspectRatio,
-                                            Qt.TransformationMode.SmoothTransformation))  # fmt: skip
+def withoutBackground(image: QImage) -> QImage:
+    '''Turns the flat light background transparent, keeping soft edges (colour-to-alpha against the corner colour)'''
+    image = image.convertToFormat(QImage.Format.Format_ARGB32)
+    background = QColor(image.pixel(0, 0))
+    base = (background.red(), background.green(), background.blue())
+    result = QImage(image.size(), QImage.Format.Format_ARGB32)
+    for y in range(image.height()):
+        for x in range(image.width()):
+            color = QColor(image.pixel(x, y))
+            channels = (color.red(), color.green(), color.blue())
+            # how far each channel is from the background, as a share of how far it could go
+            alpha = max(
+                (b - c) / b if c < b else (c - b) / (255 - b) if b < 255 else 0.0 for c, b in zip(channels, base)
+            )
+            alpha = min(1.0, max(0.0, alpha))
+            if alpha < 0.02:
+                result.setPixelColor(x, y, QColor(0, 0, 0, 0))
+                continue
+            # the colour that, laid over the background at this alpha, gives the original pixel
+            red, green, blue = (min(255, max(0, round((c - b * (1 - alpha)) / alpha))) for c, b in zip(channels, base))
+            result.setPixelColor(x, y, QColor(red, green, blue, round(alpha * 255)))
+    return result
+
+
+def content(image: QImage) -> QRect:
+    left, top, right, bottom = image.width(), image.height(), -1, -1
+    for y in range(image.height()):
+        for x in range(image.width()):
+            if QColor.fromRgba(image.pixel(x, y)).alpha() > 12:
+                left, top, right, bottom = min(left, x), min(top, y), max(right, x), max(bottom, y)
+    return QRect(left, top, right - left + 1, bottom - top + 1)
+
+
+def square(logo: QImage, margin: float = 0.04) -> QImage:
+    '''The cropped logo centred on a transparent square'''
+    side = round(max(logo.width(), logo.height()) * (1 + 2 * margin))
+    canvas = QImage(side, side, QImage.Format.Format_ARGB32_Premultiplied)
+    canvas.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(canvas)
+    painter.drawImage((side - logo.width()) // 2, (side - logo.height()) // 2, logo)
     painter.end()
-    return image
+    return canvas
 
 
 def png(image: QImage) -> bytes:
@@ -73,11 +85,18 @@ def writeIco(images: list[QImage], target: str) -> None:
 
 def main() -> None:
     app = QGuiApplication.instance() or QGuiApplication(sys.argv)
-    wolf = QImage(SOURCE)
-    if wolf.isNull():
+    source = QImage(SOURCE)
+    if source.isNull():
         raise SystemExit(f"could not read {SOURCE}")
-    writeIco([render(size, wolf) for size in SIZES], TARGET)
-    print('wrote', os.path.normpath(TARGET))
+    clear = withoutBackground(source)
+    logo = square(clear.copy(content(clear)))
+    images = [
+        logo.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        for size in SIZES
+    ]
+    writeIco(images, TARGET)
+    images[-1].save(PREVIEW)
+    print('wrote', os.path.normpath(TARGET), 'and', os.path.normpath(PREVIEW))
     del app
 
 
