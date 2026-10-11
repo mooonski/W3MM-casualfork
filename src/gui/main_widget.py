@@ -50,6 +50,7 @@ from watchdog.events import DirModifiedEvent, FileModifiedEvent, PatternMatching
 from watchdog.observers import Observer
 
 from src.core.archives import IN_USE, moveToFolder, recycle, scanArchives
+from src.core.conflicts import ConflictScan, findConflicts, loadOrder
 from src.core.duplicates import duplicateEntries, matchingEntries, versionNote
 from src.core.fetcher import isArchive
 from src.core.health import ERROR, INFO, WARNING, Issue, checkHealth
@@ -91,6 +92,7 @@ from src.gui.alerts import (
 )
 from src.gui.archives_dialog import RECYCLE, ArchiveCleanupDialog, sizeText
 from src.gui.browse_widget import BrowseWidget
+from src.gui.conflicts_dialog import FileConflictsDialog
 from src.gui.details_dialog import DetailsDialog
 from src.gui.health_dialog import HealthDialog
 from src.gui.history_dialog import DownloadHistoryDialog
@@ -440,6 +442,7 @@ class CustomMainWidget(QWidget):
         self.actionRefresh_Mod_List.triggered.connect(lambda e: self.refreshList())
         self.actionRefresh_Load_Order.triggered.connect(lambda e: self.refreshLoadOrder())
         self.actionScriptConflicts.triggered.connect(self.showScriptConflicts)
+        self.actionFileConflicts.triggered.connect(self.showFileConflicts)
         self.actionHealthCheck.triggered.connect(self.showHealthCheck)
         self.actionSelect_All_Mods.triggered.connect(self.selectAllMods)
         self.actionEnableAll.triggered.connect(lambda: self.setVisibleModsEnabled(True))
@@ -2736,6 +2739,26 @@ class CustomMainWidget(QWidget):
             self.output(translate("MainWindow", "Couldn't check script conflicts:") + f" {err}")
             return None
 
+    def fileConflicts(self) -> ConflictScan | None:
+        config = data.getConfig()
+        if not config.mods:
+            return None
+        try:
+            return findConflicts(config.mods, loadOrder(config.mods, config.getPriority))
+        except OSError as err:
+            self.output(translate("MainWindow", "Couldn't check file conflicts:") + f" {err}")
+            return None
+
+    def showFileConflicts(self) -> None:
+        scan = self.fileConflicts()
+        if scan is None:
+            return
+        names = {}
+        for mod in self.model.all():
+            for folder in mod.files:
+                names[folder.lstrip("~").casefold()] = mod.name
+        FileConflictsDialog(self, scan, names).exec()
+
     def detectScriptMerger(self) -> bool:
         '''Looks for Script Merger when no path is set'''
         config = data.getConfig()
@@ -2834,6 +2857,9 @@ class CustomMainWidget(QWidget):
 
         self.actionScriptConflicts = QAction(self.mainWindow)
         self.actionScriptConflicts.setObjectName("actionScriptConflicts")
+
+        self.actionFileConflicts = QAction(self.mainWindow)
+        self.actionFileConflicts.setObjectName("actionFileConflicts")
 
         self.actionHealthCheck = QAction(self.mainWindow)
         self.actionHealthCheck.setObjectName("actionHealthCheck")
@@ -3059,6 +3085,7 @@ class CustomMainWidget(QWidget):
         self.menuFile.addAction(self.actionRefresh_Mod_List)
         self.menuFile.addAction(self.actionRefresh_Load_Order)
         self.menuFile.addAction(self.actionScriptConflicts)
+        self.menuFile.addAction(self.actionFileConflicts)
         self.menuFile.addAction(self.actionHealthCheck)
         self.menuFile.addAction(self.actionSelect_All_Mods)
 
@@ -3169,6 +3196,10 @@ class CustomMainWidget(QWidget):
         )
         self.actionRefresh_Load_Order.setText(translate("MainWindow", "Refresh Load Order"))
         self.actionRefresh_Load_Order.setShortcut("F6")
+        self.actionFileConflicts.setText(translate("MainWindow", "File Conflicts..."))
+        self.actionFileConflicts.setToolTip(
+            translate("MainWindow", "Which mod the game takes each file from when several mods pack the same file")
+        )
         self.actionScriptConflicts.setText(translate("MainWindow", "Script Conflicts..."))
         self.actionScriptConflicts.setToolTip(
             translate("MainWindow", "Scripts changed by more than one mod, and whether they are merged")
