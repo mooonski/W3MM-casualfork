@@ -1,10 +1,12 @@
 '''Nexus dialogs and background worker'''
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -23,7 +25,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.core.nexus import FAILED, UP_TO_DATE, UPDATE_AVAILABLE, NexusClient, NexusError, NexusFile, UpdateCheck
+from src.core.nexus import (
+    FAILED,
+    UP_TO_DATE,
+    UPDATE_AVAILABLE,
+    ModFiles,
+    NexusClient,
+    NexusError,
+    NexusFile,
+    UpdateCheck,
+)
 from src.core.rmmr import ADD, LINK, SKIP, ImportPlan
 from src.core.updater import Backup
 from src.globals import data
@@ -339,3 +350,104 @@ class RmmrImportDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+
+RECORD = "record"
+SWITCH = "switch"
+
+
+class NexusFileDialog(QDialog):
+    '''Lets the user say which file of a Nexus mod they have installed, or switch to another one'''
+
+    def __init__(self, parent: QWidget | None, name: str, files: ModFiles, installed: NexusFile | None, recorded: bool):
+        super().__init__(parent)
+        self.setWindowTitle(translate("Nexus", "Choose Nexus File") + f" - {name}")
+        self.resize(1000, 480)
+        self.choice = ''
+        layout = QVBoxLayout(self)
+        if installed is None:
+            known = translate("Nexus", "Which file is installed isn't known yet.")
+        elif recorded:
+            known = translate("Nexus", "Recorded as installed:") + f" {installed.label()}"
+        else:
+            known = translate("Nexus", "Best guess at what's installed:") + f" {installed.label()}"
+        note = QLabel(
+            known
+            + "\n"
+            + translate(
+                "Nexus",
+                "'This Is What I Have' records the selected file, so update checks follow exactly that file. "
+                "'Switch to This File' downloads it and installs it into this mod's entry, after a backup.",
+            )
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        self.tree = QTreeWidget(self)
+        self.tree.setColumnCount(6)
+        self.tree.setHeaderLabels(
+            [
+                translate("Nexus", "File"),
+                translate("Nexus", "Version"),
+                translate("Nexus", "Category"),
+                translate("Nexus", "Uploaded"),
+                translate("Nexus", "Size"),
+                translate("Nexus", "Installed"),
+            ]
+        )
+        self.tree.setRootIsDecorated(False)
+        self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for column in range(1, 6):
+            self.tree.header().setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        layout.addWidget(self.tree)
+
+        current = sorted(files.currentFiles(), key=lambda f: f.uploaded, reverse=True)
+        others = sorted((f for f in files.files.values() if not f.current), key=lambda f: f.uploaded, reverse=True)
+        self.files = current + others
+        selected = 0
+        for index, file in enumerate(self.files):
+            uploaded = time.strftime("%Y-%m-%d", time.gmtime(file.uploaded)) if file.uploaded else ''
+            size = f"{file.size / 1048576:.1f} MB" if file.size >= 1048576 else f"{max(1, file.size // 1024)} KB"
+            mark = ''
+            if installed is not None and file.fileId == installed.fileId:
+                mark = translate("Nexus", "Yes") if recorded else translate("Nexus", "Probably")
+                selected = index
+            item = QTreeWidgetItem([file.name, file.version, file.categoryName, uploaded, size, mark])
+            item.setToolTip(0, file.description or file.fileName)
+            if not file.current:
+                for column in range(6):
+                    item.setForeground(column, QBrush(QColor("#a0a0a0")))
+            self.tree.addTopLevelItem(item)
+        if self.files:
+            self.tree.setCurrentItem(self.tree.topLevelItem(selected))
+        self.tree.itemDoubleClicked.connect(self.recordClicked)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel, self)
+        self.recordButton = buttons.addButton(
+            translate("Nexus", "This Is What I Have"), QDialogButtonBox.ButtonRole.ActionRole
+        )
+        self.switchButton = buttons.addButton(
+            translate("Nexus", "Switch to This File"), QDialogButtonBox.ButtonRole.ActionRole
+        )
+        self.recordButton.clicked.connect(lambda: self.finish(RECORD))
+        self.switchButton.clicked.connect(lambda: self.finish(SWITCH))
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.recordButton.setEnabled(bool(self.files))
+        self.switchButton.setEnabled(bool(self.files))
+
+    def selected(self) -> NexusFile | None:
+        item = self.tree.currentItem()
+        if item is None:
+            return None
+        return self.files[self.tree.indexOfTopLevelItem(item)]
+
+    def recordClicked(self, item: QTreeWidgetItem) -> None:
+        '''Double-clicking a file records it as the installed one'''
+        self.tree.setCurrentItem(item)
+        self.finish(RECORD)
+
+    def finish(self, choice: str) -> None:
+        if self.selected() is not None:
+            self.choice = choice
+            self.accept()

@@ -68,12 +68,17 @@ class NexusFile:
     def current(self) -> bool:
         return self.category in CURRENT_CATEGORIES
 
+    @property
+    def categoryName(self) -> str:
+        '''The category as the website shows it, e.g. "Old Version"'''
+        return self.category.replace('_', ' ').title()
+
     def label(self) -> str:
         version = self.version
         if version and not version.lower().startswith('v'):
             version = 'v' + version
         uploaded = time.strftime('%Y-%m-%d', time.gmtime(self.uploaded)) if self.uploaded else ''
-        parts = [self.name, version, f"[{self.category.title()}]", uploaded]
+        parts = [self.name, version, f"[{self.categoryName}]", uploaded]
         return '  '.join(part for part in parts if part)
 
 

@@ -85,7 +85,9 @@ from src.gui.details_dialog import DetailsDialog
 from src.gui.health_dialog import HealthDialog
 from src.gui.mod_preview import ModPreview
 from src.gui.nexus_dialogs import (
+    SWITCH,
     BackupsDialog,
+    NexusFileDialog,
     NexusWorker,
     RmmrImportDialog,
     UpdateRow,
@@ -433,6 +435,7 @@ class CustomMainWidget(QWidget):
         self.actionCheckUpdates.triggered.connect(lambda: self.checkForUpdates())
         self.actionUpdateMods.triggered.connect(self.updateSelectedMods)
         self.actionSetNexusMod.triggered.connect(self.setNexusMod)
+        self.actionChooseFile.triggered.connect(self.chooseInstalledFile)
         self.actionOpenNexusPage.triggered.connect(self.openNexusPage)
         self.actionRestoreBackup.triggered.connect(self.restoreBackup)
         self.actionImportRmmr.triggered.connect(self.importFromRmmr)
@@ -564,6 +567,7 @@ class CustomMainWidget(QWidget):
         menu.addSeparator()
         menu.addAction(self.actionUpdateMods)
         menu.addAction(self.actionSetNexusMod)
+        menu.addAction(self.actionChooseFile)
         menu.addAction(self.actionRestoreBackup)
         menu.addSeparator()
         menu.addAction(self.actionRename)
@@ -1475,6 +1479,50 @@ class CustomMainWidget(QWidget):
         self.model.write()
         self.refreshList()
         self.refreshNexusDetails(silent=True, onlyMissing=True)
+
+    def chooseInstalledFile(self) -> None:
+        '''Shows the files of the selected mod's Nexus page, to record which one is installed or switch to another'''
+        selected = self.getSelectedMods()
+        if len(selected) != 1:
+            self.output(translate("MainWindow", "Select one mod."))
+            return
+        name = selected[0]
+        mod = self.model.get(name)
+        if not (mod.nexus and mod.nexus.modId):
+            self.output(name + ": " + translate("MainWindow", "no Nexus ID, use Set Nexus Mod... first"))
+            return
+        if self.nexusBusy():
+            return
+        client = self.nexusClient()
+        if client is None:
+            return
+        modId = mod.nexus.modId
+
+        def work(progress):
+            return client.modFiles(modId)
+
+        self.runNexus(work, lambda files: self.installedFileChosen(name, files))
+
+    def installedFileChosen(self, name: str, files: ModFiles) -> None:
+        mod = self.model.modList.get(name)
+        if mod is None or mod.nexus is None:
+            return
+        check = checkForUpdate(mod.nexus, files, mod.name, mod.date)
+        recorded = bool(check.installed and mod.nexus.fileId == check.installed.fileId)
+        dialog = NexusFileDialog(self, name, files, check.installed, recorded)
+        if not dialog.exec():
+            return
+        file = dialog.selected()
+        if file is None:
+            return
+        if dialog.choice == SWITCH:
+            self.downloadAndUpdate([(name, file)])
+            return
+        mod.nexus = NexusInfo.fromFile(mod.nexus.modId, file, mod.nexus.archive, mod.nexus.game)
+        self.updateChecks[name] = checkForUpdate(mod.nexus, files, mod.name, mod.date)
+        self.model.write()
+        self.refreshList()
+        self.output(name + ": " + translate("MainWindow", "recorded as") + f" {file.label()}")
 
     def openNexusPage(self) -> None:
         for name in self.getSelectedMods():
@@ -2424,6 +2472,9 @@ class CustomMainWidget(QWidget):
         self.actionSetNexusMod = QAction(self.mainWindow)
         self.actionSetNexusMod.setObjectName("actionSetNexusMod")
 
+        self.actionChooseFile = QAction(self.mainWindow)
+        self.actionChooseFile.setObjectName("actionChooseFile")
+
         self.actionOpenNexusPage = QAction(self.mainWindow)
         self.actionOpenNexusPage.setObjectName("actionOpenNexusPage")
 
@@ -2563,6 +2614,7 @@ class CustomMainWidget(QWidget):
         self.menuNexus.addAction(self.actionUpdateMods)
         self.menuNexus.addSeparator()
         self.menuNexus.addAction(self.actionSetNexusMod)
+        self.menuNexus.addAction(self.actionChooseFile)
         self.menuNexus.addAction(self.actionOpenNexusPage)
         self.menuNexus.addAction(self.actionRestoreBackup)
         self.menuNexus.addAction(self.actionImportRmmr)
@@ -2700,6 +2752,10 @@ class CustomMainWidget(QWidget):
         self.actionUpdateMods.setToolTip(translate("MainWindow", "Check the selected mods and update them"))
         self.actionUpdateMods.setShortcut("Ctrl+F7")
         self.actionSetNexusMod.setText(translate("MainWindow", "Set Nexus Mod..."))
+        self.actionChooseFile.setText(translate("MainWindow", "Choose Nexus File..."))
+        self.actionChooseFile.setToolTip(
+            translate("MainWindow", "Record which file of the Nexus page is installed, or switch to another file")
+        )
         self.actionOpenNexusPage.setText(translate("MainWindow", "Open Nexus Page"))
         self.actionOpenNexusPage.setShortcut("Ctrl+N")
         self.actionRestoreBackup.setText(translate("MainWindow", "Restore Previous Version..."))
