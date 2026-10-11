@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 from watchdog.events import DirModifiedEvent, FileModifiedEvent, PatternMatchingEventHandler
 from watchdog.observers import Observer
 
-from src.core.archives import IN_USE, moveToFolder, recycle, scanArchives
+from src.core.archives import IN_USE, moveToFolder, recycle, scanArchives, unfinishedDownload
 from src.core.conflicts import ConflictScan, findConflicts, loadOrder
 from src.core.duplicates import duplicateEntries, matchingEntries, versionNote
 from src.core.endorsements import EndorsementCache
@@ -1050,6 +1050,12 @@ class CustomMainWidget(QWidget):
                 progressMax = len(file)
                 installer = Installer(self.model, output=self.output, duplicate=self.handleDuplicate)
                 for mod in file:
+                    waiting = unfinishedDownload(mod)
+                    if waiting:
+                        self.output(f"{path.basename(mod)}: {waiting}")
+                        errorCount += 1
+                        progress += 1
+                        continue
                     progressStart = 100 * progress / progressMax
                     progressEnd = 100 * (progress + 1) / progressMax
                     progressCur = progressEnd - progressStart

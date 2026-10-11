@@ -239,3 +239,43 @@ class CleanupGuiTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnfinishedDownloadTests(unittest.TestCase):
+    def test_empty_files_from_a_browser_that_is_still_downloading(self):
+        from src.core.archives import unfinishedDownload
+
+        with tempfile.TemporaryDirectory() as folder:
+            name = "Look Around You Geralt 11512 3 2026-10-01T09-05Z GpMW8t91H"
+            firefox = Path(folder, name + ".zip")
+            firefox.write_bytes(b"")
+            Path(folder, name + ".ggISUkqn.zip.part").write_bytes(b"PK")
+            self.assertIn("ggISUkqn.zip.part", unfinishedDownload(str(firefox)))
+            chrome = Path(folder, "Other.7z")
+            chrome.write_bytes(b"")
+            Path(folder, "Other.7z.crdownload").write_bytes(b"7z")
+            self.assertIn("isn't finished yet", unfinishedDownload(str(chrome)))
+            empty = Path(folder, "Broken.rar")
+            empty.write_bytes(b"")
+            self.assertIn("download it again", unfinishedDownload(str(empty)))
+            full = Path(folder, "Fine.zip")
+            full.write_bytes(b"PK")
+            self.assertEqual(unfinishedDownload(str(full)), "")
+            self.assertEqual(unfinishedDownload(str(Path(folder, "missing.zip"))), "")
+            self.assertEqual(unfinishedDownload(folder), "")
+
+    def test_install_explains_instead_of_failing_in_7zip(self):
+        with tempfile.TemporaryDirectory() as folder:
+            archive = Path(folder, "Mod.zip")
+            archive.write_bytes(b"")
+            Path(folder, "Mod.abc.zip.part").write_bytes(b"PK")
+            widget = Mock()
+            with (
+                patch("src.gui.main_widget.Installer") as installer,
+                patch("src.gui.main_widget.data.config", SimpleNamespace(lastpath="")),
+            ):
+                self.assertEqual(CustomMainWidget.installModFiles(widget, [str(archive)]), 0)
+            installer.return_value.installMod.assert_not_called()
+            lines = [c.args[0] for c in widget.output.call_args_list]
+            self.assertTrue(any("Mod.zip: The download isn't finished yet" in line for line in lines), lines)
+            self.assertIn("(1 errors)", lines[-1])

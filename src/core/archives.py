@@ -145,6 +145,33 @@ def _size(path: str) -> int:
         return 0
 
 
+def unfinishedDownload(archive: str) -> str:
+    """Why an archive can't be installed yet, or "": browsers create the file empty and keep the data in a .part
+    file (Firefox: "<name>.<random>.<extension>.part", Chrome and Edge: .crdownload) until the download is done"""
+    try:
+        if not os.path.isfile(archive) or os.path.getsize(archive) > 0:
+            return ''
+    except OSError:
+        return ''
+    folder, name = os.path.split(archive)
+    stem, extension = os.path.splitext(name)
+    try:
+        others = os.listdir(folder or '.')
+    except OSError:
+        others = []
+    partial = [
+        other
+        for other in others
+        if other.endswith((extension + '.part', '.crdownload')) and other.startswith(stem) and other != name
+    ]
+    if partial:
+        return (
+            f"The download isn't finished yet: the file is empty and the browser is still writing {partial[0]}. "
+            "Wait until the browser says it's done, then try again."
+        )
+    return "The file is empty. The download may not have finished or may have failed; download it again."
+
+
 def moveToFolder(paths: list[str], target: str) -> list[tuple[str, str]]:
     '''Moves files into target (never overwriting). Returns (path, error) for the ones that failed.'''
     failed = []
