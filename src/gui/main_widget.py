@@ -52,6 +52,8 @@ from watchdog.observers import Observer
 from src.core.duplicates import duplicateEntries, matchingEntries, versionNote
 from src.core.fetcher import isArchive
 from src.core.health import ERROR, INFO, WARNING, Issue, checkHealth
+from src.core.history import FAILED as DOWNLOAD_FAILED
+from src.core.history import INSTALLED, KEPT, LINK, UPDATE, UPDATED, WEBSITE, Download, DownloadHistory
 from src.core.installer import Installer
 from src.core.model import Model
 from src.core.nexus import (
@@ -88,6 +90,7 @@ from src.gui.alerts import (
 from src.gui.browse_widget import BrowseWidget
 from src.gui.details_dialog import DetailsDialog
 from src.gui.health_dialog import HealthDialog
+from src.gui.history_dialog import DownloadHistoryDialog
 from src.gui.icons import icon
 from src.gui.mod_preview import ModPreview
 from src.gui.nexus_dialogs import (
@@ -155,6 +158,7 @@ class CustomMainWidget(QWidget):
         self.nexusWorker: NexusWorker | None = None
         self.nxmQueue: list[str] = []
         self.nexusDetails = DetailsCache(data.getConfig().configuration)
+        self.downloadHistory = DownloadHistory(data.getConfig().configuration)
         self.detailsWorker: NexusWorker | None = None
         self.requirementsWorker: NexusWorker | None = None
 
@@ -456,6 +460,7 @@ class CustomMainWidget(QWidget):
         self.actionChooseFile.triggered.connect(self.chooseInstalledFile)
         self.actionOpenNexusPage.triggered.connect(self.openNexusPage)
         self.actionEndorse.triggered.connect(self.endorseMods)
+        self.actionDownloadHistory.triggered.connect(self.showDownloadHistory)
         self.actionRestoreBackup.triggered.connect(self.restoreBackup)
         self.actionImportRmmr.triggered.connect(self.importFromRmmr)
         self.actionRefreshDetails.triggered.connect(lambda: self.refreshNexusDetails())
@@ -1002,6 +1007,7 @@ class CustomMainWidget(QWidget):
             + ")"
             + (f" ({incompleteCount} " + translate("MainWindow", "incomplete") + ")" if incompleteCount else "")
         )
+        return successCount
 
     def uninstallMods(self):
         '''Uninstalls selected mods'''
@@ -1532,12 +1538,20 @@ class CustomMainWidget(QWidget):
         updater = ModUpdater(self.model, output=self.output)
         for index, (name, modId, file, archive, error, status) in enumerate(results):
             mod = self.model.modList.get(name)
+            record = self.downloadHistory.add(
+                Download(0, modId, file.fileId, file.name, file.version, archive, UPDATE, DOWNLOAD_FAILED, error, name)
+            )
             if status == 403 and mod is not None:
                 # free accounts can only download through the website's "Mod Manager Download" button
+                self.downloadHistory.finish(record, WEBSITE)
                 self.openNexusDownload(modId, file.fileId, name)
                 continue
             if error or mod is None:
                 self.output(f"{name}: {error or translate('MainWindow', 'no longer installed')}")
+                if not error:
+                    self.downloadHistory.finish(
+                        record, KEPT, translate("MainWindow", "The mod was no longer installed")
+                    )
                 failed += 1
                 continue
             self.output(
@@ -1549,8 +1563,12 @@ class CustomMainWidget(QWidget):
             if result.success:
                 updated += 1
                 self.updateChecks[name] = UpdateCheck(UP_TO_DATE, file, file, confident=True)
+                self.downloadHistory.finish(record, UPDATED)
             else:
                 failed += 1
+                self.downloadHistory.finish(
+                    record, DOWNLOAD_FAILED, translate("MainWindow", "The update failed, see the log")
+                )
             if result.incomplete:
                 incomplete += 1
         self.setProgress(0)
@@ -1915,10 +1933,22 @@ class CustomMainWidget(QWidget):
 
     def nxmDownloaded(self, result: tuple[NxmLink, NexusFile | None, str]) -> None:
         link, file, archive = result
+        record = Download(
+            0,
+            link.modId,
+            link.fileId,
+            file.name if file else "",
+            file.version if file else "",
+            archive,
+            LINK,
+            KEPT if archive else WEBSITE,
+        )
+        self.downloadHistory.add(record)
         if not archive:
             self.openNexusDownload(link.modId, link.fileId, file.name if file else str(link.modId))
             return
         filename = path.basename(archive)
+        record.name = record.name or filename
         self.output(translate("MainWindow", "Downloaded") + f" {filename}")
         self.raiseWindow()
         label = f"{file.name} {file.version}".strip() if file else filename
@@ -1932,7 +1962,14 @@ class CustomMainWidget(QWidget):
         if answer != QMessageBox.StandardButton.Yes:
             self.output(translate("MainWindow", "Kept in") + f" {path.dirname(archive)}")
             return
-        self.installModFiles([archive])
+        installed = self.installModFiles([archive])
+        entries = [mod.name for mod in self.model.all() if mod.nexus and mod.nexus.archive == filename]
+        if installed:
+            self.downloadHistory.finish(record, INSTALLED, mod=", ".join(entries))
+        else:
+            self.downloadHistory.finish(
+                record, DOWNLOAD_FAILED, translate("MainWindow", "Couldn't install it, see the log")
+            )
         self.browse.markInstalled()
         if file is None:
             return
@@ -2008,6 +2045,12 @@ class CustomMainWidget(QWidget):
         self.updatePreview()
         if not silent:
             self.output(translate("MainWindow", "Loaded Nexus details for") + " " + plural(len(found), "mod"))
+
+    def showDownloadHistory(self) -> None:
+        self.downloadHistory.load()
+        dialog = DownloadHistoryDialog(self, self.downloadHistory.entries)
+        if dialog.exec() and dialog.chosen is not None:
+            self.installModFiles([dialog.chosen.archive])
 
     def endorseMods(self) -> None:
         '''Shows how the linked mods are rated on Nexus and endorses (or abstains from) the ticked ones'''
@@ -2750,6 +2793,9 @@ class CustomMainWidget(QWidget):
         self.actionEndorse = QAction(self.mainWindow)
         self.actionEndorse.setObjectName("actionEndorse")
 
+        self.actionDownloadHistory = QAction(self.mainWindow)
+        self.actionDownloadHistory.setObjectName("actionDownloadHistory")
+
         self.actionRestoreBackup = QAction(self.mainWindow)
         self.actionRestoreBackup.setObjectName("actionRestoreBackup")
 
@@ -2892,6 +2938,7 @@ class CustomMainWidget(QWidget):
         self.menuNexus.addAction(self.actionChooseFile)
         self.menuNexus.addAction(self.actionOpenNexusPage)
         self.menuNexus.addAction(self.actionEndorse)
+        self.menuNexus.addAction(self.actionDownloadHistory)
         self.menuNexus.addAction(self.actionRestoreBackup)
         self.menuNexus.addAction(self.actionImportRmmr)
         self.menuNexus.addSeparator()
@@ -3043,6 +3090,10 @@ class CustomMainWidget(QWidget):
         )
         self.actionOpenNexusPage.setText(translate("MainWindow", "Open Nexus Page"))
         self.actionEndorse.setText(translate("MainWindow", "Endorse Mods..."))
+        self.actionDownloadHistory.setText(translate("MainWindow", "Download History..."))
+        self.actionDownloadHistory.setToolTip(
+            translate("MainWindow", "Files downloaded from Nexus, what became of them, and installing them again")
+        )
         self.actionEndorse.setToolTip(
             translate("MainWindow", "See which of your mods you endorsed on Nexus, and endorse the ones you like")
         )
