@@ -155,6 +155,7 @@ class ModUpdater:
             if entry is not None:
                 incomplete = self._applyEntry(new, entry) or incomplete
             new.nexus = nexus if nexus is not None else mod.nexus
+            new.group = mod.group
             if priority is not None and str(priority).isdecimal():
                 new.priority = priority
                 data.getConfig().write_priority()
@@ -188,6 +189,7 @@ class ModUpdater:
         new = self.model.get(entry.name)
         incomplete = self._applyEntry(new, entry) or incomplete
         new.nexus = entry.nexus
+        new.group = entry.group
         self.model.write()
         return UpdateResult(True, bool(incomplete), "")
 

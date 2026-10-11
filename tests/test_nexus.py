@@ -422,6 +422,7 @@ class UpdaterTests(unittest.TestCase):
 
     def test_update_replaces_files_and_keeps_entry_state_and_settings(self):
         mod = self.installV1(priority=3)
+        mod.group = "Visuals"
         result = ModUpdater(self.model).update(
             mod,
             self.package("v2", "v2", options="OptionA=1,OptionB=2"),
@@ -431,6 +432,7 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(list(self.model.list()), ["Example"])
         updated = Model(ignorelock=True).get("Example")
         self.assertEqual(updated.priority, "3")
+        self.assertEqual(updated.group, "Visuals")
         self.assertTrue(updated.enabled)
         self.assertEqual((updated.nexus.fileId, updated.nexus.version, updated.nexus.archive), (2, "2.0", "v2.zip"))
         self.assertEqual(self.asset(), "v2")
@@ -508,8 +510,10 @@ class UpdaterTests(unittest.TestCase):
     def test_nexus_details_round_trip_through_inventory(self):
         mod = self.installV1()
         mod.nexus = NexusInfo(42, 7, "1.2.3", "Example Main", 1700000000, "Example 42 1.2.3 a.zip")
+        mod.group = 'Quests & "Story" 100%'
         self.model.write()
         self.assertEqual(Model(ignorelock=True).get("Example").nexus, mod.nexus)
+        self.assertEqual(Model(ignorelock=True).get("Example").group, 'Quests & "Story" 100%')
         mod.nexus = None
         self.model.write()
         self.assertIsNone(Model(ignorelock=True).get("Example").nexus)
@@ -523,6 +527,7 @@ class UpdaterTests(unittest.TestCase):
 
     def test_restore_after_the_mod_was_uninstalled(self):
         mod = self.installV1()
+        mod.group = "Combat"
         updater = ModUpdater(self.model)
         self.assertTrue(updater.update(mod, self.package("v2", "v2"), NexusInfo(42, 2, "2.0")).success)
         self.assertTrue(Installer(self.model).uninstallMod(self.model.get("Example")))
@@ -534,6 +539,7 @@ class UpdaterTests(unittest.TestCase):
         restored = Model(ignorelock=True).get("Example")
         self.assertEqual(self.asset(), "v1")
         self.assertEqual((restored.nexus.fileId, restored.nexus.version), (1, "1.0"))
+        self.assertEqual(restored.group, "Combat")
         self.assertEqual([setting.option for setting in restored.usersettings], ["OptionA"])
         self.assertCountEqual(restored.menus, ["example.xml", "old.xml"])
 

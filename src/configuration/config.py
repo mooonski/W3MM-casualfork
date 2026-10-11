@@ -257,6 +257,31 @@ class Configuration:
         self.set('SETTINGS', 'keeparchives', value)
 
     @property
+    def groups(self) -> list[str]:
+        '''Names of the mod list's groups, in the order they are shown'''
+        return self._jsonList('GROUPS', 'order')
+
+    @groups.setter
+    def groups(self, value: list[str]):
+        self.set('GROUPS', 'order', json.dumps(list(value)).replace('%', '%%'))
+
+    @property
+    def collapsedgroups(self) -> list[str]:
+        '''Groups the user folded away in the mod list'''
+        return self._jsonList('GROUPS', 'collapsed')
+
+    @collapsedgroups.setter
+    def collapsedgroups(self, value: list[str]):
+        self.set('GROUPS', 'collapsed', json.dumps(sorted(set(value))).replace('%', '%%'))
+
+    def _jsonList(self, section: str, option: str) -> list[str]:
+        try:
+            value = json.loads(self.get(section, option, '[]') or '[]')
+        except ValueError:
+            return []
+        return [str(item) for item in value] if isinstance(value, list) else []
+
+    @property
     def backupsaves(self) -> str:
         '''"1" to copy the newest game saves to the backup folder before updating mods'''
         return self.get('SETTINGS', 'backupsaves', '1')

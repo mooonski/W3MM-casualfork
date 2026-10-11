@@ -53,6 +53,7 @@ from src.core.archives import IN_USE, moveToFolder, recycle, scanArchives
 from src.core.conflicts import ConflictScan, findConflicts, loadOrder
 from src.core.duplicates import duplicateEntries, matchingEntries, versionNote
 from src.core.fetcher import isArchive
+from src.core.groups import addGroup, cleanName, moveGroup, orderedGroups, removeGroup, renameGroup
 from src.core.health import ERROR, INFO, WARNING, Issue, checkHealth
 from src.core.history import FAILED as DOWNLOAD_FAILED
 from src.core.history import INSTALLED, KEPT, LINK, UPDATE, UPDATED, WEBSITE, Download, DownloadHistory
@@ -126,7 +127,7 @@ from src.gui.requirements_dialog import RequirementsDialog
 from src.gui.saves_dialog import SaveBackupsDialog
 from src.gui.scriptmerger_dialog import MessageAlertScriptConflicts, ScriptConflictsDialog
 from src.gui.themes import get_dark_palette, get_light_palette, get_system_palette, statusColor
-from src.gui.tree_widget import CustomTreeWidgetItem
+from src.gui.tree_widget import GROUP_ROLE, CustomTreeWidgetItem, GroupItem, isGroupItem
 from src.util.syntax import *
 from src.util.util import *
 
@@ -521,6 +522,8 @@ class CustomMainWidget(QWidget):
         self.textEdit.customContextMenuRequested.connect(self.openEditMenu)
 
         self.treeWidget.itemChanged.connect(self.modToggled)
+        self.treeWidget.itemExpanded.connect(lambda item: self.groupFolded(item, False))
+        self.treeWidget.itemCollapsed.connect(lambda item: self.groupFolded(item, True))
         self.treeWidget.installEventFilter(self)
         self.treeWidget.itemDoubleClicked.connect(self.modDoubleClicked)
         self.treeWidget.itemSelectionChanged.connect(self.updatePreview)
@@ -636,6 +639,11 @@ class CustomMainWidget(QWidget):
     def openMenu(self, position):
         '''Right click menu on mod list (Left panel)'''
         menu = QMenu()
+        clicked = self.treeWidget.itemAt(position)
+        if isGroupItem(clicked):
+            self.fillGroupMenu(menu, clicked.data(0, GROUP_ROLE))
+            menu.exec(self.treeWidget.viewport().mapToGlobal(position))
+            return
         menu.addAction(self.actionDetails)
         menu.addSeparator()
         menu.addAction(self.actionSetPriority)
@@ -650,6 +658,7 @@ class CustomMainWidget(QWidget):
         menu.addAction(self.actionChooseFile)
         menu.addAction(self.actionRestoreBackup)
         menu.addSeparator()
+        menu.addMenu(self.moveToGroupMenu(menu))
         menu.addAction(self.actionRename)
         menu.addAction(self.actionReinstall_Mods)
         menu.addAction(self.actionUninstall_Mods)
@@ -790,6 +799,8 @@ class CustomMainWidget(QWidget):
     def modToggled(self, item, column):
         """Triggered when the mod check state is changed.
         Enables or disables the mod based on the current check state"""
+        if isGroupItem(item):
+            return
         try:
             if item.checkState(column) == Qt.CheckState.Checked:
                 incomplete = self.model.get(item.text(1)).enable()
@@ -1274,11 +1285,7 @@ class CustomMainWidget(QWidget):
 
     def setVisibleModsEnabled(self, enabled: bool) -> None:
         '''Enables or disables every mod shown in the list (respecting the search)'''
-        names = []
-        for index in range(self.treeWidget.topLevelItemCount()):
-            item = self.treeWidget.topLevelItem(index)
-            if item is not None:
-                names.append(item.text(1))
+        names = [item.text(1) for item in self.modItems()]
         self.setModsEnabled(names, enabled)
 
     def setModsEnabled(self, names: list[str], enabled: bool) -> int:
@@ -1306,10 +1313,9 @@ class CustomMainWidget(QWidget):
         self.model.write()
         self.treeWidget.blockSignals(True)
         try:
-            for index in range(self.treeWidget.topLevelItemCount()):
-                item = self.treeWidget.topLevelItem(index)
-                mod = self.model.modList.get(item.text(1)) if item is not None else None
-                if item is not None and mod is not None:
+            for item in self.modItems():
+                mod = self.model.modList.get(item.text(1))
+                if mod is not None:
                     item.setCheckState(0, Qt.CheckState.Checked if mod.enabled else Qt.CheckState.Unchecked)
         finally:
             self.treeWidget.blockSignals(False)
@@ -1325,7 +1331,7 @@ class CustomMainWidget(QWidget):
     def enableDisableMods(self):
         '''Changes checked state of the selected mods'''
         try:
-            selected = self.treeWidget.selectedItems()
+            selected = [item for item in self.treeWidget.selectedItems() if not isGroupItem(item)]
             if not selected:
                 return
             self.setProgress(0)
@@ -2500,6 +2506,7 @@ class CustomMainWidget(QWidget):
         try:
             selected = self.getSelectedMods()
             self.treeWidget.clear()
+            headers = self.groupHeaders()
             duplicates = duplicateEntries(self.model)
             moddata = []
             for mod in self.model.all():
@@ -2539,6 +2546,7 @@ class CustomMainWidget(QWidget):
                     mod.nexus.version if mod.nexus else "",
                     statusText(self.updateChecks.get(mod.name)),
                     self.modCategory(mod),
+                    parent=headers.get(mod.group if mod.group in headers else ""),
                 )
                 if mod.name in duplicates:
                     row.setForeground(1, QBrush(statusColor("warning")))
@@ -2548,8 +2556,9 @@ class CustomMainWidget(QWidget):
                         + "\n"
                         + "\n".join(f"{mod.name} {reason}" for reason in duplicates[mod.name]),
                     )
+            self.finishGroupHeaders(headers)
             for item in selected:
-                rows = self.treeWidget.findItems(item, Qt.MatchFlag.MatchEndsWith, 1)
+                rows = self.treeWidget.findItems(item, Qt.MatchFlag.MatchEndsWith | Qt.MatchFlag.MatchRecursive, 1)
                 if rows:
                     for row in rows:
                         row.setSelected(True)
@@ -2667,8 +2676,9 @@ class CustomMainWidget(QWidget):
         version="",
         update="",
         category="",
+        parent=None,
     ):
-        '''Adds mod data to the list'''
+        '''Adds mod data to the list, under the given group heading if there is one'''
         if data_ == 0:
             datastr = "-"
         else:
@@ -2734,7 +2744,10 @@ class CustomMainWidget(QWidget):
                 item.setCheckState(0, Qt.CheckState.Checked)
             else:
                 item.setCheckState(0, Qt.CheckState.Unchecked)
-        self.treeWidget.addTopLevelItem(item)
+        if parent is not None:
+            parent.addChild(item)
+        else:
+            self.treeWidget.addTopLevelItem(item)
         return item
 
     def getSelectedMods(self):
@@ -2743,9 +2756,146 @@ class CustomMainWidget(QWidget):
         getSelected = self.treeWidget.selectedItems()
         if getSelected:
             for selected in getSelected:
-                baseNode = selected
-                array.append(baseNode.text(1))
+                if not isGroupItem(selected):
+                    array.append(selected.text(1))
         return array
+
+    # Groups in the mod list
+
+    def modItems(self) -> list:
+        """Every mod row in the list, also those under group headings"""
+        items = []
+        for index in range(self.treeWidget.topLevelItemCount()):
+            item = self.treeWidget.topLevelItem(index)
+            if isGroupItem(item):
+                items += [item.child(child) for child in range(item.childCount())]
+            elif item is not None:
+                items.append(item)
+        return items
+
+    def groupHeaders(self) -> dict:
+        """Headings for the mod list's groups (and one for mods without a group), or none when no group exists"""
+        order = orderedGroups(data.getConfig().groups, self.model.all())
+        self.treeWidget.setRootIsDecorated(bool(order))
+        headers = {}
+        if not order:
+            return headers
+        for rank, name in enumerate(order + [""]):
+            header = GroupItem(name, rank)
+            self.treeWidget.addTopLevelItem(header)
+            header.setFirstColumnSpanned(True)
+            headers[name] = header
+        return headers
+
+    def finishGroupHeaders(self, headers: dict) -> None:
+        collapsed = set(data.getConfig().collapsedgroups)
+        self.treeWidget.blockSignals(True)
+        try:
+            for name, header in headers.items():
+                count = header.childCount()
+                label = name or translate("MainWindow", "Ungrouped")
+                header.setText(0, f"{label}  ({count})")
+                header.setToolTip(0, translate("MainWindow", "Right-click to rename, move or remove the group"))
+                # an empty group stays visible so mods can be put in it, unless a search is hiding things
+                header.setHidden(count == 0 and (not name or bool(self.searchString)))
+                header.setExpanded(name not in collapsed)
+        finally:
+            self.treeWidget.blockSignals(False)
+
+    def groupFolded(self, item, folded: bool) -> None:
+        if not isGroupItem(item):
+            return
+        name = item.data(0, GROUP_ROLE)
+        collapsed = set(data.getConfig().collapsedgroups)
+        if folded:
+            collapsed.add(name)
+        else:
+            collapsed.discard(name)
+        data.getConfig().collapsedgroups = sorted(collapsed)
+
+    def moveToGroupMenu(self, parent) -> QMenu:
+        """The "Group" submenu of the mod list's right-click menu"""
+        menu = QMenu(translate("MainWindow", "Group"), parent)
+        selected = [self.model.modList[name] for name in self.getSelectedMods() if name in self.model.modList]
+        current = {mod.group for mod in selected}
+        for name in orderedGroups(data.getConfig().groups, self.model.all()):
+            action = menu.addAction(name)
+            action.setCheckable(True)
+            action.setChecked(current == {name})
+            action.setEnabled(bool(selected))
+            action.triggered.connect(lambda _=False, group=name: self.setModsGroup(group))
+        if menu.actions():
+            menu.addSeparator()
+        menu.addAction(translate("MainWindow", "New Group..."), self.newGroup)
+        remove = menu.addAction(translate("MainWindow", "Remove from Group"), lambda: self.setModsGroup(""))
+        remove.setEnabled(any(mod.group for mod in selected))
+        return menu
+
+    def fillGroupMenu(self, menu: QMenu, name: str) -> None:
+        """Right-click menu of a group heading"""
+        if not name:
+            menu.addAction(translate("MainWindow", "New Group..."), self.newGroup)
+            return
+        order = orderedGroups(data.getConfig().groups, self.model.all())
+        menu.addAction(translate("MainWindow", "Rename Group..."), lambda: self.renameModGroup(name))
+        up = menu.addAction(translate("MainWindow", "Move Group Up"), lambda: self.moveModGroup(name, -1))
+        down = menu.addAction(translate("MainWindow", "Move Group Down"), lambda: self.moveModGroup(name, 1))
+        up.setEnabled(order.index(name) > 0)
+        down.setEnabled(order.index(name) < len(order) - 1)
+        menu.addSeparator()
+        menu.addAction(translate("MainWindow", "New Group..."), self.newGroup)
+        menu.addAction(translate("MainWindow", "Remove Group (keeps its mods)"), lambda: self.removeModGroup(name))
+
+    def askGroupName(self, title: str, current: str = "") -> str:
+        name, ok = QInputDialog.getText(self, title, translate("MainWindow", "Group name:"), text=current)
+        return cleanName(name) if ok else ""
+
+    def saveGroups(self, order: list[str]) -> None:
+        data.getConfig().groups = order
+        self.model.write()
+        self.refreshList()
+
+    def setModsGroup(self, name: str) -> None:
+        """Puts the selected mods in the named group ("" takes them out of their group)"""
+        selected = [self.model.modList[n] for n in self.getSelectedMods() if n in self.model.modList]
+        for mod in selected:
+            mod.group = name
+        order = orderedGroups(data.getConfig().groups, self.model.all())
+        self.saveGroups(addGroup(order, name) if name else order)
+
+    def newGroup(self) -> None:
+        name = self.askGroupName(translate("MainWindow", "New Group"))
+        if not name:
+            return
+        data.getConfig().groups = addGroup(orderedGroups(data.getConfig().groups, self.model.all()), name)
+        if self.getSelectedMods():
+            self.setModsGroup(name)
+        else:
+            self.refreshList()
+
+    def renameModGroup(self, old: str) -> None:
+        new = self.askGroupName(translate("MainWindow", "Rename Group"), old)
+        if not new or new == old:
+            return
+        order = renameGroup(self.model.all(), orderedGroups(data.getConfig().groups, self.model.all()), old, new)
+        collapsed = set(data.getConfig().collapsedgroups)
+        if old in collapsed:
+            collapsed.discard(old)
+            collapsed.add(new)
+            data.getConfig().collapsedgroups = sorted(collapsed)
+        self.saveGroups(order)
+
+    def moveModGroup(self, name: str, offset: int) -> None:
+        self.saveGroups(moveGroup(orderedGroups(data.getConfig().groups, self.model.all()), name, offset))
+
+    def removeModGroup(self, name: str) -> None:
+        order = removeGroup(self.model.all(), orderedGroups(data.getConfig().groups, self.model.all()), name)
+        self.output(
+            translate("MainWindow", "Removed the group")
+            + f" {name}; "
+            + translate("MainWindow", "its mods are now ungrouped")
+        )
+        self.saveGroups(order)
 
     def getSelectedFiles(self):
         array = []

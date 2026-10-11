@@ -359,6 +359,7 @@ class TickTests(unittest.TestCase):
         self.changed.reset_mock()
         self.widget.model = SimpleNamespace(modList=self.mods, write=Mock(), get=lambda name: self.mods[name])
         self.widget.setModsEnabled = lambda names, enabled: CustomMainWidget.setModsEnabled(self.widget, names, enabled)
+        self.widget.modItems = lambda: CustomMainWidget.modItems(self.widget)
 
     def states(self):
         tree = self.widget.treeWidget

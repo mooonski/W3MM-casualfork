@@ -163,6 +163,7 @@ class Model:
         else:
             mod.enabled = False
         mod.name = str(root.get('name'))
+        mod.group = str(root.get('group') or '')
         prt = str(root.get('priority'))
         if prt != 'Not Set':
             mod.priority = prt
@@ -228,6 +229,8 @@ class Model:
         elem.set('enabled', str(mod.enabled))
         elem.set('date', mod.date)
         elem.set('priority', mod.priority)
+        if mod.group:
+            elem.set('group', mod.group)
         if mod.files:
             for file in mod.files:
                 XML.SubElement(elem, 'data').text = file

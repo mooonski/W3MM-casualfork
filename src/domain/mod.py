@@ -37,6 +37,7 @@ class Mod:
     readmes: List[str] = field(default_factory=list)
     inis: List[str] = field(default_factory=list)
     nexus: Optional[NexusInfo] = None
+    group: str = ''  # the group it is shown under in the mod list
 
     def __post_init__(self):
         self.date = strftime("%Y-%m-%d %H:%M:%S", gmtime())
