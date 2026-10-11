@@ -9,7 +9,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
 from src.core.nexus import APP_NAME, GAME_DOMAIN, NexusError, nameKey, safeFileName, similarity
@@ -26,6 +26,65 @@ SORTS = ("relevance", "endorsements", "downloads", "updatedAt", "createdAt")
 DETAIL_FIELDS = (
     "modId name summary category author version updatedAt thumbnailUrl pictureUrl endorsements downloads adultContent"
 )
+REQUIREMENT_FIELDS = (
+    "modRequirements { dlcRequirements { gameExpansion { name } notes } "
+    "nexusRequirements { nodes { modId modName gameId notes externalRequirement url } } }"
+)
+
+# details stored by older versions lack the requirements and are fetched again
+DETAILS_SCHEMA = 2
+
+
+@dataclass
+class Requirement:
+    '''Something a mod page lists under "Requirements": another Nexus mod, a game expansion or an outside tool'''
+
+    name: str
+    modId: int = 0
+    gameId: int = 0
+    notes: str = ''
+    external: bool = False
+    url: str = ''
+    dlc: bool = False
+
+    @classmethod
+    def fromJson(cls, value: dict[str, Any]) -> 'Requirement':
+        known = {item.name for item in fields(cls)}
+        return cls(**{key: item for key, item in value.items() if key in known})
+
+    @property
+    def pageUrl(self) -> str:
+        if self.url:
+            return self.url
+        if self.modId and self.gameId == GAME_ID:
+            return f"https://www.nexusmods.com/{GAME_DOMAIN}/mods/{self.modId}"
+        return ''
+
+
+def parseRequirements(value: Any) -> list[Requirement]:
+    '''The requirements part of a GraphQL mod node'''
+    if not isinstance(value, dict):
+        return []
+    found = []
+    for item in value.get('dlcRequirements') or []:
+        name = str(((item or {}).get('gameExpansion') or {}).get('name') or '')
+        if name:
+            found.append(Requirement(name, notes=str(item.get('notes') or ''), dlc=True))
+    for item in (value.get('nexusRequirements') or {}).get('nodes') or []:
+        try:
+            found.append(
+                Requirement(
+                    str(item.get('modName') or ''),
+                    int(item.get('modId') or 0),
+                    int(item.get('gameId') or 0),
+                    str(item.get('notes') or ''),
+                    bool(item.get('externalRequirement')),
+                    str(item.get('url') or ''),
+                )
+            )
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return found
 
 
 @dataclass
@@ -43,9 +102,12 @@ class ModDetails:
     downloads: int = 0
     adult: bool = False
     fetched: int = 0
+    requirements: list[Requirement] = field(default_factory=list)
+    schema: int = 0
 
     @classmethod
     def fromGraphQL(cls, node: dict[str, Any], fetched: int = 0) -> 'ModDetails':
+        withRequirements = 'modRequirements' in node
         return cls(
             modId=int(node['modId']),
             name=str(node.get('name') or ''),
@@ -60,12 +122,18 @@ class ModDetails:
             downloads=int(node.get('downloads') or 0),
             adult=bool(node.get('adultContent')),
             fetched=fetched,
+            requirements=parseRequirements(node.get('modRequirements')),
+            schema=DETAILS_SCHEMA if withRequirements else 0,
         )
 
     @classmethod
     def fromJson(cls, value: dict[str, Any]) -> 'ModDetails':
-        known = {field.name for field in fields(cls)}
-        return cls(**{key: item for key, item in value.items() if key in known})
+        known = {item.name for item in fields(cls)}
+        values = {key: item for key, item in value.items() if key in known}
+        values['requirements'] = [
+            Requirement.fromJson(item) for item in values.get('requirements') or [] if isinstance(item, dict)
+        ]
+        return cls(**values)
 
     @property
     def url(self) -> str:
@@ -125,7 +193,7 @@ class NexusGraphQL:
         now = int(time.time())
         text = (
             'query($ids: [CompositeDomainWithIdInput!]!, $count: Int) '
-            f'{{ legacyModsByDomain(ids: $ids, count: $count) {{ nodes {{ {DETAIL_FIELDS} }} }} }}'
+            f'{{ legacyModsByDomain(ids: $ids, count: $count) {{ nodes {{ {DETAIL_FIELDS} {REQUIREMENT_FIELDS} }} }} }}'
         )
         for start in range(0, len(ids), chunk):
             part = ids[start : start + chunk]
@@ -260,9 +328,19 @@ class DetailsCache:
         self.mods.update(details)
 
     def missing(self, modIds: list[int], maxAge: int = 86400) -> list[int]:
-        '''Mods with no details yet, or details older than maxAge seconds'''
+        '''Mods with no details yet, details older than maxAge seconds, or details stored by an older version'''
         now = int(time.time())
-        return sorted({modId for modId in modIds if modId and (now - getattr(self.get(modId), 'fetched', 0)) > maxAge})
+        return sorted(
+            {
+                modId
+                for modId in modIds
+                if modId
+                and (
+                    (now - getattr(self.get(modId), 'fetched', 0)) > maxAge
+                    or getattr(self.get(modId), 'schema', 0) < DETAILS_SCHEMA
+                )
+            }
+        )
 
     def imagePath(self, url: str) -> str:
         if not url:

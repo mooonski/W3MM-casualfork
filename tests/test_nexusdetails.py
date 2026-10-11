@@ -16,10 +16,12 @@ from PySide6.QtWidgets import QApplication
 from src.core.health import WARNING, checkHealth
 from src.core.nexus import NexusError, NexusInfo
 from src.core.nexusdetails import (
+    DETAILS_SCHEMA,
     REMASTERED_RELEASE,
     DetailsCache,
     ModDetails,
     NexusGraphQL,
+    Requirement,
     parseTime,
     remasteredSuggestions,
     searchTerms,
@@ -87,6 +89,39 @@ class DetailsTests(unittest.TestCase):
         self.assertEqual(ModDetails.fromJson({"modId": 3, "name": "A", "unknown": 1}), ModDetails(3, "A"))
         self.assertEqual((parseTime(None), parseTime("garbage")), (0, 0))
 
+    def test_requirements(self):
+        node = dict(
+            NODE,
+            modRequirements={
+                "dlcRequirements": [{"gameExpansion": {"name": "Blood and Wine"}, "notes": None}, {"gameExpansion": None}],
+                "nexusRequirements": {
+                    "nodes": [
+                        {"modId": "12997", "modName": "Sharedutils", "gameId": "952", "notes": "Needed",
+                         "externalRequirement": False, "url": ""},
+                        {"modId": "0", "modName": "ReShade", "gameId": "0", "notes": None,
+                         "externalRequirement": True, "url": "https://reshade.me/"},
+                        {"modId": "bad"},
+                    ]
+                },
+            },
+        )  # fmt: skip
+        details = ModDetails.fromGraphQL(node, 5)
+        self.assertEqual(details.schema, DETAILS_SCHEMA)
+        self.assertEqual(
+            details.requirements,
+            [
+                Requirement("Blood and Wine", dlc=True),
+                Requirement("Sharedutils", 12997, 952, "Needed"),
+                Requirement("ReShade", external=True, url="https://reshade.me/"),
+            ],
+        )
+        self.assertEqual(details.requirements[1].pageUrl, "https://www.nexusmods.com/witcher3/mods/12997")
+        self.assertEqual(details.requirements[2].pageUrl, "https://reshade.me/")
+        self.assertEqual(details.requirements[0].pageUrl, "")
+        self.assertEqual(ModDetails.fromGraphQL(NODE).schema, 0)  # search results don't carry requirements
+        stored = json.loads(json.dumps(__import__("dataclasses").asdict(details)))
+        self.assertEqual(ModDetails.fromJson(stored), details)
+
     def test_query_errors(self):
         open_, _ = opener({"errors": [{"message": "x" * 500}], "data": None})
         with self.assertRaises(NexusError) as raised:
@@ -112,6 +147,7 @@ class DetailsTests(unittest.TestCase):
             [{"gameDomain": "witcher3", "modId": 1}, {"gameDomain": "witcher3", "modId": 2}],
         )
         self.assertEqual(requests[0].get_header("Content-type"), "application/json")
+        self.assertIn("nexusRequirements", body(requests[0])["query"])
 
     def test_search_filters(self):
         result = {"data": {"mods": {"totalCount": 7, "nodes": [NODE]}}}
@@ -181,12 +217,18 @@ class CacheTests(unittest.TestCase):
     def test_round_trip_and_ages(self):
         cache = DetailsCache(self.folder)
         now = int(time.time())
-        cache.update({1: ModDetails(1, "A", fetched=now), 2: ModDetails(2, "B", fetched=now - 100000)})
+        cache.update(
+            {
+                1: ModDetails(1, "A", fetched=now, schema=DETAILS_SCHEMA),
+                2: ModDetails(2, "B", fetched=now - 100000, schema=DETAILS_SCHEMA),
+                4: ModDetails(4, "D", fetched=now),  # stored before requirements were kept
+            }
+        )
         cache.save()
         again = DetailsCache(self.folder)
-        self.assertEqual(again.get(1), ModDetails(1, "A", fetched=now))
+        self.assertEqual(again.get(1), ModDetails(1, "A", fetched=now, schema=DETAILS_SCHEMA))
         self.assertIsNone(again.get(0))
-        self.assertEqual(again.missing([1, 2, 3, 0]), [2, 3])
+        self.assertEqual(again.missing([1, 2, 3, 4, 0]), [2, 3, 4])
         Path(self.folder, "nexus_details.json").write_text("{broken")
         self.assertEqual(DetailsCache(self.folder).mods, {})
 

@@ -66,11 +66,13 @@ from src.core.nexus import (
     NexusInfo,
     UpdateCheck,
     checkForUpdate,
+    parseArchiveName,
     parseModReference,
     uniquePath,
 )
-from src.core.nexusdetails import DetailsCache, NexusGraphQL, remasteredSuggestions
+from src.core.nexusdetails import DetailsCache, ModDetails, NexusGraphQL, remasteredSuggestions
 from src.core.nxm import NxmLink, NxmRegistration, WindowsRegistry, forward, parseNxm
+from src.core.requirements import EXTERNAL, missingRequirements
 from src.core.rmmr import RmmrError, applyImport, isRmmrFolder, planImport
 from src.core.scriptmerger import ConflictReport, analyse, findScriptMerger, installedVersion, isNewer, nexusId
 from src.core.updater import ModUpdater
@@ -97,6 +99,7 @@ from src.gui.nexus_dialogs import (
     askApiKey,
     statusText,
 )
+from src.gui.requirements_dialog import RequirementsDialog
 from src.gui.scriptmerger_dialog import MessageAlertScriptConflicts, ScriptConflictsDialog
 from src.gui.themes import get_dark_palette, get_light_palette, get_system_palette, statusColor
 from src.gui.tree_widget import CustomTreeWidgetItem
@@ -148,6 +151,7 @@ class CustomMainWidget(QWidget):
         self.nxmQueue: list[str] = []
         self.nexusDetails = DetailsCache(data.getConfig().configuration)
         self.detailsWorker: NexusWorker | None = None
+        self.requirementsWorker: NexusWorker | None = None
 
         self.modsSettingsWatcher = ModsSettingsWatcher()
         # connect to a method so the refresh always runs on the GUI thread
@@ -450,6 +454,7 @@ class CustomMainWidget(QWidget):
         self.actionImportRmmr.triggered.connect(self.importFromRmmr)
         self.actionRefreshDetails.triggered.connect(lambda: self.refreshNexusDetails())
         self.actionCheckRemastered.triggered.connect(self.checkRemastered)
+        self.actionCheckRequirements.triggered.connect(lambda: self.checkRequirements())
         self.actionKeepArchives.triggered.connect(self.keepArchivesChanged)
         self.actionHandleNxm.triggered.connect(self.handleNxmChanged)
         self.actionSetApiKey.triggered.connect(lambda: askApiKey(self))
@@ -972,6 +977,7 @@ class CustomMainWidget(QWidget):
                     MessageAlertIncompleteInstallation()
                 if successCount:
                     self.alertRunScriptMerger()
+                    self.checkRequirementsAfterInstall(file)
                 self.setProgress(0)
             else:
                 self.output(translate("MainWindow", "Installation canceled"))
@@ -1996,6 +2002,75 @@ class CustomMainWidget(QWidget):
         if not silent:
             self.output(translate("MainWindow", "Loaded Nexus details for") + " " + plural(len(found), "mod"))
 
+    def checkRequirementsAfterInstall(self, archives: list[str]) -> None:
+        '''After installing Nexus downloads, says if those mods need anything that isn't installed'''
+        modIds = set()
+        for archive in archives:
+            parsed = parseArchiveName(path.basename(str(archive)))
+            if parsed is not None:
+                modIds.add(parsed[1])
+        names = [mod.name for mod in self.model.all() if mod.nexus and mod.nexus.modId in modIds]
+        if names:
+            self.checkRequirements(names, afterInstall=True)
+
+    def checkRequirements(self, names: list[str] | None = None, afterInstall: bool = False) -> None:
+        '''Loads the Nexus requirements of the given mods (default: all linked ones) and lists those not met'''
+        if self.requirementsWorker is not None and self.requirementsWorker.isRunning():
+            if not afterInstall:
+                self.output(translate("MainWindow", "Still checking requirements..."))
+            return
+        mods = [
+            mod for mod in self.model.all() if mod.nexus and mod.nexus.modId and (names is None or mod.name in names)
+        ]
+        if not mods:
+            if not afterInstall:
+                self.output(translate("MainWindow", "No mods with a Nexus ID to check."))
+            return
+        modIds = sorted({mod.nexus.modId for mod in mods if mod.nexus})
+
+        def work(progress):
+            return NexusGraphQL().details(modIds)
+
+        worker = NexusWorker(work, self)
+        worker.succeeded.connect(lambda found: self.requirementsLoaded(found, names, afterInstall))
+        worker.failed.connect(
+            lambda message: self.output(translate("MainWindow", "Couldn't load Nexus requirements:") + f" {message}")
+        )
+        self.requirementsWorker = worker
+        if not afterInstall:
+            self.output(
+                translate("MainWindow", "Checking the requirements of")
+                + " "
+                + plural(len(mods), "mod")
+                + " "
+                + translate("MainWindow", "on Nexus...")
+            )
+        worker.start()
+
+    def requirementsLoaded(self, found: dict, names: list[str] | None, afterInstall: bool) -> None:
+        self.detailsFetched(found, True)
+        missing = missingRequirements(self.model, self.nexusDetails.get, data.getConfig().dlc or "", names)
+        unmet = [entry for entry in missing if entry.state != EXTERNAL]
+        if not missing:
+            if not afterInstall:
+                self.output(translate("MainWindow", "Every requirement listed on Nexus is installed."))
+            return
+        self.output(
+            "> "
+            + plural(len(unmet), translate("MainWindow", "requirement"))
+            + " "
+            + translate("MainWindow", "not met")
+            + " (Nexus > Check Requirements...)"
+        )
+        for entry in unmet:
+            self.output(f"  {entry.mod}: {entry.problem}")
+        self.raiseWindow()
+        heading = translate("MainWindow", "The mod you installed needs more.") if afterInstall else ""
+        dialog = RequirementsDialog(self, missing, heading)
+        if dialog.exec() and dialog.chosen is not None:
+            requirement = dialog.chosen.requirement
+            self.installFromNexus(ModDetails(requirement.modId, requirement.name))
+
     def checkRemastered(self) -> None:
         '''Lists mods not updated on Nexus since Remastered came out, with other versions that were'''
         if self.detailsWorker is not None and self.detailsWorker.isRunning():
@@ -2606,6 +2681,9 @@ class CustomMainWidget(QWidget):
         self.actionCheckRemastered = QAction(self.mainWindow)
         self.actionCheckRemastered.setObjectName("actionCheckRemastered")
 
+        self.actionCheckRequirements = QAction(self.mainWindow)
+        self.actionCheckRequirements.setObjectName("actionCheckRequirements")
+
         self.actionKeepArchives = QAction(self.mainWindow)
         self.actionKeepArchives.setCheckable(True)
         self.actionKeepArchives.setObjectName("actionKeepArchives")
@@ -2737,6 +2815,7 @@ class CustomMainWidget(QWidget):
         self.menuNexus.addSeparator()
         self.menuNexus.addAction(self.actionRefreshDetails)
         self.menuNexus.addAction(self.actionCheckRemastered)
+        self.menuNexus.addAction(self.actionCheckRequirements)
         self.menuNexus.addSeparator()
         self.menuNexus.addAction(self.actionSetApiKey)
         self.menuNexus.addAction(self.actionChangeArchiveFolder)
@@ -2887,6 +2966,10 @@ class CustomMainWidget(QWidget):
         self.actionRefreshDetails.setText(translate("MainWindow", "Refresh Nexus Details"))
         self.actionRefreshDetails.setToolTip(
             translate("MainWindow", "Load pictures, categories and summaries of linked mods")
+        )
+        self.actionCheckRequirements.setText(translate("MainWindow", "Check Requirements..."))
+        self.actionCheckRequirements.setToolTip(
+            translate("MainWindow", "Find mods, expansions and tools that the Nexus pages of your mods say they need")
         )
         self.actionCheckRemastered.setText(translate("MainWindow", "Check Remastered Versions..."))
         self.actionCheckRemastered.setToolTip(

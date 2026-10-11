@@ -10,6 +10,7 @@ from os import path
 from src.core.duplicates import duplicateEntries
 from src.core.model import Model
 from src.core.nexusdetails import ModDetails
+from src.core.requirements import EXTERNAL, missingRequirements
 from src.core.scriptmerger import MERGED_FOLDER, ConflictReport
 from src.domain.mod import Mod
 
@@ -50,6 +51,22 @@ def checkHealth(
                         known.url,
                     )
                 )
+    if details is not None:
+        for missing in missingRequirements(model, details, getattr(config, "dlc", "") or ''):
+            notes = missing.requirement.notes.strip()
+            if missing.state == EXTERNAL:
+                detail = "Listed on its Nexus page; it can't be checked from here" + (f": {notes}" if notes else "")
+            else:
+                detail = (notes + " " if notes else "") + "(listed as a requirement on its Nexus page)"
+            issues.append(
+                Issue(
+                    INFO if missing.state == EXTERNAL else WARNING,
+                    missing.mod,
+                    missing.problem,
+                    detail,
+                    missing.requirement.pageUrl,
+                )
+            )
     mods = config.mods or ''
     dlc = config.dlc or ''
     menu = config.menu or ''
