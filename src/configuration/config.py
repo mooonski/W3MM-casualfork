@@ -257,6 +257,15 @@ class Configuration:
         self.set('SETTINGS', 'keeparchives', value)
 
     @property
+    def backupsaves(self) -> str:
+        '''"1" to copy the newest game saves to the backup folder before updating mods'''
+        return self.get('SETTINGS', 'backupsaves', '1')
+
+    @backupsaves.setter
+    def backupsaves(self, value: str):
+        self.set('SETTINGS', 'backupsaves', value)
+
+    @property
     def previousnxm(self) -> str:
         '''The nxm:// handler command that was registered before this program took over'''
         return self.get('NEXUS', 'previousnxm', '') or ''

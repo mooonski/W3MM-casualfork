@@ -79,6 +79,7 @@ from src.core.nexusdetails import DetailsCache, ModDetails, NexusGraphQL, remast
 from src.core.nxm import NxmLink, NxmRegistration, WindowsRegistry, forward, parseNxm
 from src.core.requirements import EXTERNAL, missingRequirements
 from src.core.rmmr import RmmrError, applyImport, isRmmrFolder, planImport
+from src.core.saves import SaveBackup, backupSaves, gameSavesFolder, listSaveBackups, restoreSaves
 from src.core.scriptmerger import ConflictReport, analyse, findScriptMerger, installedVersion, isNewer, nexusId
 from src.core.updater import ModUpdater
 from src.domain.mod import Mod
@@ -110,6 +111,7 @@ from src.gui.nexus_dialogs import (
     statusText,
 )
 from src.gui.requirements_dialog import RequirementsDialog
+from src.gui.saves_dialog import SaveBackupsDialog
 from src.gui.scriptmerger_dialog import MessageAlertScriptConflicts, ScriptConflictsDialog
 from src.gui.themes import get_dark_palette, get_light_palette, get_system_palette, statusColor
 from src.gui.tree_widget import CustomTreeWidgetItem
@@ -207,6 +209,7 @@ class CustomMainWidget(QWidget):
         self.actionAlert_to_run_Script_Merger.setChecked(data.getConfig().allowpopups == "1")
         self.actionUseNativeFileDialogs.setChecked(data.getConfig().get("SETTINGS", "usenativedialog", "1") == "1")
         self.actionKeepArchives.setChecked(data.getConfig().keeparchives == "1")
+        self.actionBackupSaves.setChecked(data.getConfig().backupsaves == "1")
         self.actionHandleNxm.setEnabled(platform == "win32")
         if platform == "win32":
             try:
@@ -474,6 +477,10 @@ class CustomMainWidget(QWidget):
         self.actionCheckRemastered.triggered.connect(self.checkRemastered)
         self.actionCheckRequirements.triggered.connect(lambda: self.checkRequirements())
         self.actionKeepArchives.triggered.connect(self.keepArchivesChanged)
+        self.actionBackupSaves.triggered.connect(
+            lambda: setattr(data.getConfig(), "backupsaves", "1" if self.actionBackupSaves.isChecked() else "0")
+        )
+        self.actionSaveBackups.triggered.connect(self.showSaveBackups)
         self.actionHandleNxm.triggered.connect(self.handleNxmChanged)
         self.actionSetApiKey.triggered.connect(lambda: askApiKey(self))
         self.actionChangeArchiveFolder.triggered.connect(self.changeArchiveFolder)
@@ -1540,8 +1547,78 @@ class CustomMainWidget(QWidget):
         )
         self.runNexus(work, self.applyUpdates)
 
+    def backUpSaves(self, reason: str) -> SaveBackup | None:
+        '''Copies the newest game saves to the backup folder. Raises OSError if that fails.'''
+        config = data.getConfig()
+        backup = backupSaves(gameSavesFolder(config.settings or ""), config.backups, reason)
+        if backup is None:
+            self.output(translate("MainWindow", "Saves: nothing new to back up"))
+        else:
+            self.output(
+                translate("MainWindow", "Backed up your")
+                + f" {plural(backup.count, translate('MainWindow', 'newest save'), translate('MainWindow', 'newest saves'))} "
+                + translate("MainWindow", "to")
+                + f" {backup.directory}"
+            )
+        return backup
+
+    def backUpSavesBeforeUpdate(self) -> bool:
+        '''Returns False if the saves couldn't be copied and the user would rather not update'''
+        if data.getConfig().backupsaves != "1":
+            return True
+        try:
+            self.backUpSaves("before update")
+            return True
+        except OSError as error:
+            self.output(translate("MainWindow", "Couldn't back up your saves:") + f" {error}")
+            answer = QMessageBox.question(
+                self,
+                translate("MainWindow", "Save backup"),
+                translate("MainWindow", "Couldn't back up your saves:")
+                + f"\n{error}\n\n"
+                + translate("MainWindow", "Update the mods anyway?"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            return answer == QMessageBox.StandardButton.Yes
+
+    def showSaveBackups(self) -> None:
+        config = data.getConfig()
+        dialog = SaveBackupsDialog(self, listSaveBackups(config.backups), config.backups)
+        dialog.backUpNow = lambda: self.saveBackupRequested(dialog)
+        if not dialog.exec() or dialog.chosen is None:
+            return
+        try:
+            copied, skipped = restoreSaves(dialog.chosen, gameSavesFolder(config.settings or ""))
+        except OSError as error:
+            self.output(translate("MainWindow", "Couldn't restore the saves:") + f" {error}")
+            return
+        self.output(
+            "> "
+            + translate("MainWindow", "Copied back")
+            + f" {plural(len(copied), translate('MainWindow', 'file'))}"
+            + (
+                f", {plural(len(skipped), translate('MainWindow', 'file'))} "
+                + translate("MainWindow", "already in the save folder were left as they are")
+                if skipped
+                else ""
+            )
+        )
+
+    def saveBackupRequested(self, dialog) -> None:
+        try:
+            self.backUpSaves("manual")
+        except OSError as error:
+            self.output(translate("MainWindow", "Couldn't back up your saves:") + f" {error}")
+        dialog.showBackups(listSaveBackups(data.getConfig().backups))
+
     def applyUpdates(self, results: list[tuple[str, int, NexusFile, str, str, int]]) -> None:
         updated = failed = incomplete = 0
+        if any(archive and not error for _, _, _, archive, error, _ in results) and not self.backUpSavesBeforeUpdate():
+            self.output(
+                translate("MainWindow", "Update cancelled; the downloads are kept in") + f" {data.getConfig().archives}"
+            )
+            return
         updater = ModUpdater(self.model, output=self.output)
         for index, (name, modId, file, archive, error, status) in enumerate(results):
             mod = self.model.modList.get(name)
@@ -2875,6 +2952,13 @@ class CustomMainWidget(QWidget):
         self.actionKeepArchives.setCheckable(True)
         self.actionKeepArchives.setObjectName("actionKeepArchives")
 
+        self.actionBackupSaves = QAction(self.mainWindow)
+        self.actionBackupSaves.setCheckable(True)
+        self.actionBackupSaves.setObjectName("actionBackupSaves")
+
+        self.actionSaveBackups = QAction(self.mainWindow)
+        self.actionSaveBackups.setObjectName("actionSaveBackups")
+
         self.actionHandleNxm = QAction(self.mainWindow)
         self.actionHandleNxm.setCheckable(True)
         self.actionHandleNxm.setObjectName("actionHandleNxm")
@@ -3001,6 +3085,7 @@ class CustomMainWidget(QWidget):
         self.menuNexus.addAction(self.actionDownloadHistory)
         self.menuNexus.addAction(self.actionCleanUpArchives)
         self.menuNexus.addAction(self.actionRestoreBackup)
+        self.menuNexus.addAction(self.actionSaveBackups)
         self.menuNexus.addAction(self.actionImportRmmr)
         self.menuNexus.addSeparator()
         self.menuNexus.addAction(self.actionRefreshDetails)
@@ -3012,6 +3097,7 @@ class CustomMainWidget(QWidget):
         self.menuNexus.addAction(self.actionKeepArchives)
         self.menuNexus.addAction(self.actionHandleNxm)
         self.menuNexus.addAction(self.actionChangeBackupFolder)
+        self.menuNexus.addAction(self.actionBackupSaves)
 
         # --- Build Help menu ---
         self.menuHelp.addAction(self.actionAbout)
@@ -3152,6 +3238,14 @@ class CustomMainWidget(QWidget):
         self.actionOpenNexusPage.setText(translate("MainWindow", "Open Nexus Page"))
         self.actionEndorse.setText(translate("MainWindow", "Endorse Mods..."))
         self.actionDownloadHistory.setText(translate("MainWindow", "Download History..."))
+        self.actionSaveBackups.setText(translate("MainWindow", "Game Save Backups..."))
+        self.actionSaveBackups.setToolTip(
+            translate("MainWindow", "Copies of your newest saves, made before updates; back up or restore them")
+        )
+        self.actionBackupSaves.setText(translate("MainWindow", "Back Up Saves Before Updating"))
+        self.actionBackupSaves.setToolTip(
+            translate("MainWindow", "Copy your newest saves to the backup folder before updating mods")
+        )
         self.actionCleanUpArchives.setText(translate("MainWindow", "Clean Up Archives..."))
         self.actionCleanUpArchives.setToolTip(
             translate("MainWindow", "Find old versions and other archives you may not need in the archive folder")
