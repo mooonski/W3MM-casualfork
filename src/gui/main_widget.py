@@ -21,7 +21,7 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QAction, QActionGroup, QBrush, QCursor, QKeyEvent, QResizeEvent
+from PySide6.QtGui import QAction, QActionGroup, QBrush, QCursor, QKeyEvent, QPalette, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -52,8 +52,9 @@ from watchdog.observers import Observer
 from src.core.archives import IN_USE, moveToFolder, recycle, scanArchives
 from src.core.conflicts import ConflictScan, findConflicts, loadOrder
 from src.core.duplicates import duplicateEntries, matchingEntries, versionNote
+from src.core.endorsements import EndorsementCache
 from src.core.fetcher import isArchive
-from src.core.groups import addGroup, cleanName, moveGroup, orderedGroups, removeGroup, renameGroup
+from src.core.groups import addGroup, cleanName, moveGroup, orderedGroups, removeGroup, renameGroup, uniqueName
 from src.core.health import ERROR, INFO, WARNING, Issue, checkHealth
 from src.core.history import FAILED as DOWNLOAD_FAILED
 from src.core.history import INSTALLED, KEPT, LINK, UPDATE, UPDATED, WEBSITE, Download, DownloadHistory
@@ -61,7 +62,6 @@ from src.core.installer import Installer
 from src.core.loadorder import moveFolder, prioritiesFor
 from src.core.model import Model
 from src.core.nexus import (
-    ABSTAINED,
     ENDORSED,
     FAILED,
     GAME_DOMAIN,
@@ -110,11 +110,8 @@ from src.gui.icons import icon
 from src.gui.load_order_tree import LoadOrderTree
 from src.gui.mod_preview import ModPreview
 from src.gui.nexus_dialogs import (
-    ENDORSE,
     SWITCH,
     BackupsDialog,
-    EndorseDialog,
-    EndorseRow,
     NexusFileDialog,
     NexusWorker,
     RmmrImportDialog,
@@ -170,6 +167,9 @@ def priorityNumber(value) -> int | None:
         return None
 
 
+# the mod list's last column, with the endorse thumb
+ENDORSE_COLUMN = 15
+
 # archives moved away by Clean Up Archives go to this folder inside the archive folder
 OLD_ARCHIVES = "Old archives"
 
@@ -188,6 +188,9 @@ class CustomMainWidget(QWidget):
         self.nxmQueue: list[str] = []
         self.nexusDetails = DetailsCache(data.getConfig().configuration)
         self.downloadHistory = DownloadHistory(data.getConfig().configuration)
+        self.endorsements = EndorsementCache(data.getConfig().configuration)
+        self.endorsementsWorker: NexusWorker | None = None
+        self.endorseWorker: NexusWorker | None = None
         self.detailsWorker: NexusWorker | None = None
         self.requirementsWorker: NexusWorker | None = None
         self.loadOrderFocus = ""
@@ -221,6 +224,7 @@ class CustomMainWidget(QWidget):
         self.detectScriptMerger()
         self.reportHealth()
         self.refreshNexusDetails(silent=True, onlyMissing=True)
+        self.refreshEndorsements()
 
         QMetaObject.connectSlotsByName(self.mainWindow)
 
@@ -438,6 +442,9 @@ class CustomMainWidget(QWidget):
         self.verticalLayout_2.addLayout(self.horizontalLayout_2)
 
     def configureUi(self):
+        # the endorse column came later; give it a width instead of resetting the saved layout
+        if not data.getConfig().getWindowSection(ENDORSE_COLUMN):
+            data.getConfig().set("WINDOW", f"section{ENDORSE_COLUMN}", "34")
         for i in range(self.treeWidget.header().count()):
             if not data.getConfig().getWindowSection(i):
                 data.getConfig().setDefaultWindow()
@@ -491,7 +498,6 @@ class CustomMainWidget(QWidget):
         self.actionSetNexusMod.triggered.connect(self.setNexusMod)
         self.actionChooseFile.triggered.connect(self.chooseInstalledFile)
         self.actionOpenNexusPage.triggered.connect(self.openNexusPage)
-        self.actionEndorse.triggered.connect(self.endorseMods)
         self.actionDownloadHistory.triggered.connect(self.showDownloadHistory)
         self.actionCleanUpArchives.triggered.connect(self.cleanUpArchives)
         self.actionRestoreBackup.triggered.connect(self.restoreBackup)
@@ -522,6 +528,7 @@ class CustomMainWidget(QWidget):
         self.textEdit.customContextMenuRequested.connect(self.openEditMenu)
 
         self.treeWidget.itemChanged.connect(self.modToggled)
+        self.treeWidget.itemClicked.connect(self.modClicked)
         self.treeWidget.itemExpanded.connect(lambda item: self.groupFolded(item, False))
         self.treeWidget.itemCollapsed.connect(lambda item: self.groupFolded(item, True))
         self.treeWidget.installEventFilter(self)
@@ -549,6 +556,8 @@ class CustomMainWidget(QWidget):
         self.toolBar.addAction(self.actionCheckUpdates)
         self.toolBar.addAction(self.actionUpdateMods)
         self.toolBar.addAction(self.actionRun_Script_Merger)
+        self.toolBar.addAction(self.actionHealthCheck)
+        self.toolBar.addAction(self.actionDownloadHistory)
         self.toolBar.setIconSize(QSize(24, 24))
         self.toolBar.addSeparator()
 
@@ -632,6 +641,8 @@ class CustomMainWidget(QWidget):
             (self.actionCheckUpdates, "check"),
             (self.actionUpdateMods, "update"),
             (self.actionRun_Script_Merger, "merge"),
+            (self.actionHealthCheck, "health"),
+            (self.actionDownloadHistory, "history"),
         ):
             action.setIcon(icon(name))
             action.setIconVisibleInMenu(False)
@@ -640,6 +651,10 @@ class CustomMainWidget(QWidget):
         '''Right click menu on mod list (Left panel)'''
         menu = QMenu()
         clicked = self.treeWidget.itemAt(position)
+        if clicked is None:
+            menu.addAction(translate("MainWindow", "Add Separator"), self.addSeparator)
+            menu.exec(self.treeWidget.viewport().mapToGlobal(position))
+            return
         if isGroupItem(clicked):
             self.fillGroupMenu(menu, clicked.data(0, GROUP_ROLE))
             menu.exec(self.treeWidget.viewport().mapToGlobal(position))
@@ -651,7 +666,6 @@ class CustomMainWidget(QWidget):
         menu.addSeparator()
         menu.addAction(self.actionOpenFolder)
         menu.addAction(self.actionOpenNexusPage)
-        menu.addAction(self.actionEndorse)
         menu.addSeparator()
         menu.addAction(self.actionUpdateMods)
         menu.addAction(self.actionSetNexusMod)
@@ -799,7 +813,11 @@ class CustomMainWidget(QWidget):
     def modToggled(self, item, column):
         """Triggered when the mod check state is changed.
         Enables or disables the mod based on the current check state"""
-        if isGroupItem(item):
+        # other columns change too (icons, colours) and have no tick to read
+        if column != 0 or isGroupItem(item):
+            return
+        mod = self.model.modList.get(item.text(1))
+        if mod is None or (item.checkState(0) == Qt.CheckState.Checked) == mod.enabled:
             return
         try:
             if item.checkState(column) == Qt.CheckState.Checked:
@@ -2215,76 +2233,84 @@ class CustomMainWidget(QWidget):
         if dialog.exec() and dialog.chosen is not None:
             self.installModFiles([dialog.chosen.archive])
 
-    def endorseMods(self) -> None:
-        '''Shows how the linked mods are rated on Nexus and endorses (or abstains from) the ticked ones'''
-        if self.nexusBusy():
+    # Endorsements: a thumb at the end of each Nexus mod's row, filled when the user endorsed it
+
+    def showEndorsement(self, item, mod: Mod) -> None:
+        if not (mod.nexus and mod.nexus.modId):
             return
-        rows: dict[int, EndorseRow] = {}
-        for mod in sorted(self.model.all(), key=lambda m: m.name.lower()):
-            if mod.nexus and mod.nexus.modId:
-                row = rows.setdefault(mod.nexus.modId, EndorseRow([], mod.nexus.modId, mod.nexus.version, ""))
-                row.names.append(mod.name)
-        if not rows:
-            self.output(translate("MainWindow", "No mods with a Nexus ID."))
+        if self.endorsements.endorsed(mod.nexus.modId):
+            item.setIcon(ENDORSE_COLUMN, icon("thumb-filled", color=self.palette().color(QPalette.ColorRole.Text)))
+            item.setToolTip(ENDORSE_COLUMN, translate("MainWindow", "You endorsed this mod. Click to take it back."))
+        else:
+            item.setIcon(ENDORSE_COLUMN, icon("thumb", color=statusColor("muted")))
+            item.setToolTip(ENDORSE_COLUMN, translate("MainWindow", "Click to endorse this mod on Nexus"))
+
+    def showEndorsements(self) -> None:
+        self.treeWidget.blockSignals(True)
+        try:
+            for item in self.modItems():
+                mod = self.model.modList.get(item.text(1))
+                if mod is not None:
+                    self.showEndorsement(item, mod)
+        finally:
+            self.treeWidget.blockSignals(False)
+
+    def refreshEndorsements(self) -> None:
+        """Loads which mods the user endorsed, quietly, when an API key is set"""
+        key = data.getConfig().nexusapikey
+        if not key or (self.endorsementsWorker is not None and self.endorsementsWorker.isRunning()):
             return
+        client = NexusClient(key)
+        worker = NexusWorker(lambda progress: client.endorsements(), self)
+        worker.succeeded.connect(self.endorsementsLoaded)
+        worker.failed.connect(lambda message: print("could not load endorsements:", message))
+        self.endorsementsWorker = worker
+        worker.start()
+
+    def endorsementsLoaded(self, statuses: dict) -> None:
+        self.endorsements.replace(statuses)
+        self.showEndorsements()
+
+    def modClicked(self, item, column: int) -> None:
+        if column == ENDORSE_COLUMN and not isGroupItem(item):
+            self.toggleEndorsement(item.text(1))
+
+    def toggleEndorsement(self, name: str) -> None:
+        """Endorses the mod on Nexus, or takes the endorsement back after asking"""
+        mod = self.model.modList.get(name)
+        if mod is None or not (mod.nexus and mod.nexus.modId):
+            return
+        if self.endorseWorker is not None and self.endorseWorker.isRunning():
+            return
+        modId = mod.nexus.modId
+        endorse = not self.endorsements.endorsed(modId)
+        if not endorse:
+            answer = QMessageBox.question(
+                self,
+                translate("MainWindow", "Endorsement"),
+                translate("MainWindow", "Take back your endorsement of") + f" {name}?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
         client = self.nexusClient()
         if client is None:
             return
-        selected = []
-        for name in self.getSelectedMods():
-            mod = self.model.modList.get(name)
-            if mod is not None and mod.nexus and mod.nexus.modId:
-                selected.append(mod.nexus.modId)
-        self.runNexus(
-            lambda progress: client.endorsements(),
-            lambda statuses: self.endorsementsLoaded(client, list(rows.values()), statuses, selected),
-        )
+        version = mod.nexus.version
+        worker = NexusWorker(lambda progress: client.endorse(modId, version, endorse), self)
+        worker.succeeded.connect(lambda status: self.endorsementSent(name, modId, status))
+        worker.failed.connect(lambda message: self.output(f"{name}: {message}"))
+        self.endorseWorker = worker
+        worker.start()
 
-    def endorsementsLoaded(self, client: NexusClient, rows: list, statuses: dict, selected: list[int]) -> None:
-        for row in rows:
-            row.status = statuses.get(row.modId, "")
-        ticked = [modId for modId in selected if statuses.get(modId) != ENDORSED]
-        dialog = EndorseDialog(self, rows, ticked)
-        if not dialog.exec() or not dialog.action:
-            return
-        endorse = dialog.action == ENDORSE
-        chosen = [row for row in dialog.selection() if row.status != (ENDORSED if endorse else ABSTAINED)]
-        if not chosen:
-            return
-
-        def work(progress):
-            results = []
-            for index, row in enumerate(chosen):
-                try:
-                    results.append((row, client.endorse(row.modId, row.version, endorse), ""))
-                except NexusError as error:
-                    if error.status in (401, 429):
-                        raise
-                    results.append((row, "", str(error)))
-                progress(index + 1, len(chosen))
-            return results
-
-        self.output(
-            (translate("MainWindow", "Endorsing") if endorse else translate("MainWindow", "Abstaining from"))
-            + " "
-            + plural(len(chosen), "mod")
-            + " "
-            + translate("MainWindow", "on Nexus...")
-        )
-        self.runNexus(work, lambda results: self.endorsementsSent(results, endorse))
-
-    def endorsementsSent(self, results: list, endorse: bool) -> None:
-        done = [row for row, status, error in results if not error]
-        self.output(
-            "> "
-            + (translate("MainWindow", "Endorsed") if endorse else translate("MainWindow", "Abstained from"))
-            + " "
-            + plural(len(done), "mod")
-            + (": " + ", ".join(row.names[0] for row in done) if done else "")
-        )
-        for row, status, error in results:
-            if error:
-                self.output(f"  {row.names[0]}: {error}")
+    def endorsementSent(self, name: str, modId: int, status: str) -> None:
+        self.endorsements.set(modId, status)
+        self.showEndorsements()
+        if status == ENDORSED:
+            self.output(translate("MainWindow", "Endorsed") + f" {name}. " + translate("MainWindow", "Thank you!"))
+        else:
+            self.output(translate("MainWindow", "Took back your endorsement of") + f" {name}")
 
     def checkRequirementsAfterInstall(self, archives: list[str]) -> None:
         '''After installing Nexus downloads, says if those mods need anything that isn't installed'''
@@ -2548,6 +2574,7 @@ class CustomMainWidget(QWidget):
                     self.modCategory(mod),
                     parent=headers.get(mod.group if mod.group in headers else ""),
                 )
+                self.showEndorsement(row, mod)
                 if mod.name in duplicates:
                     row.setForeground(1, QBrush(statusColor("warning")))
                     row.setToolTip(
@@ -2725,6 +2752,7 @@ class CustomMainWidget(QWidget):
             str(version),
             str(update),
             str(category),
+            "",
         ]
         item = CustomTreeWidgetItem(proplist)
         item.setTextAlignment(12, Qt.AlignmentFlag.AlignCenter)
@@ -2793,9 +2821,9 @@ class CustomMainWidget(QWidget):
         try:
             for name, header in headers.items():
                 count = header.childCount()
-                label = name or translate("MainWindow", "Ungrouped")
+                label = name or translate("MainWindow", "Other mods")
                 header.setText(0, f"{label}  ({count})")
-                header.setToolTip(0, translate("MainWindow", "Right-click to rename, move or remove the group"))
+                header.setToolTip(0, translate("MainWindow", "Right-click to rename, move or remove the separator"))
                 # an empty group stays visible so mods can be put in it, unless a search is hiding things
                 header.setHidden(count == 0 and (not name or bool(self.searchString)))
                 header.setExpanded(name not in collapsed)
@@ -2815,7 +2843,7 @@ class CustomMainWidget(QWidget):
 
     def moveToGroupMenu(self, parent) -> QMenu:
         """The "Group" submenu of the mod list's right-click menu"""
-        menu = QMenu(translate("MainWindow", "Group"), parent)
+        menu = QMenu(translate("MainWindow", "Separator"), parent)
         selected = [self.model.modList[name] for name in self.getSelectedMods() if name in self.model.modList]
         current = {mod.group for mod in selected}
         for name in orderedGroups(data.getConfig().groups, self.model.all()):
@@ -2826,28 +2854,28 @@ class CustomMainWidget(QWidget):
             action.triggered.connect(lambda _=False, group=name: self.setModsGroup(group))
         if menu.actions():
             menu.addSeparator()
-        menu.addAction(translate("MainWindow", "New Group..."), self.newGroup)
-        remove = menu.addAction(translate("MainWindow", "Remove from Group"), lambda: self.setModsGroup(""))
+        menu.addAction(translate("MainWindow", "New Separator..."), self.newGroup)
+        remove = menu.addAction(translate("MainWindow", "Remove from Separator"), lambda: self.setModsGroup(""))
         remove.setEnabled(any(mod.group for mod in selected))
         return menu
 
     def fillGroupMenu(self, menu: QMenu, name: str) -> None:
         """Right-click menu of a group heading"""
         if not name:
-            menu.addAction(translate("MainWindow", "New Group..."), self.newGroup)
+            menu.addAction(translate("MainWindow", "Add Separator"), self.addSeparator)
             return
         order = orderedGroups(data.getConfig().groups, self.model.all())
-        menu.addAction(translate("MainWindow", "Rename Group..."), lambda: self.renameModGroup(name))
-        up = menu.addAction(translate("MainWindow", "Move Group Up"), lambda: self.moveModGroup(name, -1))
-        down = menu.addAction(translate("MainWindow", "Move Group Down"), lambda: self.moveModGroup(name, 1))
+        menu.addAction(translate("MainWindow", "Rename Separator..."), lambda: self.renameModGroup(name))
+        up = menu.addAction(translate("MainWindow", "Move Separator Up"), lambda: self.moveModGroup(name, -1))
+        down = menu.addAction(translate("MainWindow", "Move Separator Down"), lambda: self.moveModGroup(name, 1))
         up.setEnabled(order.index(name) > 0)
         down.setEnabled(order.index(name) < len(order) - 1)
         menu.addSeparator()
-        menu.addAction(translate("MainWindow", "New Group..."), self.newGroup)
-        menu.addAction(translate("MainWindow", "Remove Group (keeps its mods)"), lambda: self.removeModGroup(name))
+        menu.addAction(translate("MainWindow", "Add Separator"), self.addSeparator)
+        menu.addAction(translate("MainWindow", "Remove Separator (keeps its mods)"), lambda: self.removeModGroup(name))
 
     def askGroupName(self, title: str, current: str = "") -> str:
-        name, ok = QInputDialog.getText(self, title, translate("MainWindow", "Group name:"), text=current)
+        name, ok = QInputDialog.getText(self, title, translate("MainWindow", "Separator name:"), text=current)
         return cleanName(name) if ok else ""
 
     def saveGroups(self, order: list[str]) -> None:
@@ -2863,8 +2891,13 @@ class CustomMainWidget(QWidget):
         order = orderedGroups(data.getConfig().groups, self.model.all())
         self.saveGroups(addGroup(order, name) if name else order)
 
+    def addSeparator(self) -> None:
+        """Adds an empty separator with a plain name; it can be renamed from its right-click menu"""
+        order = orderedGroups(data.getConfig().groups, self.model.all())
+        self.saveGroups(addGroup(order, uniqueName(translate("MainWindow", "Separator"), order)))
+
     def newGroup(self) -> None:
-        name = self.askGroupName(translate("MainWindow", "New Group"))
+        name = self.askGroupName(translate("MainWindow", "New Separator"))
         if not name:
             return
         data.getConfig().groups = addGroup(orderedGroups(data.getConfig().groups, self.model.all()), name)
@@ -2874,7 +2907,7 @@ class CustomMainWidget(QWidget):
             self.refreshList()
 
     def renameModGroup(self, old: str) -> None:
-        new = self.askGroupName(translate("MainWindow", "Rename Group"), old)
+        new = self.askGroupName(translate("MainWindow", "Rename Separator"), old)
         if not new or new == old:
             return
         order = renameGroup(self.model.all(), orderedGroups(data.getConfig().groups, self.model.all()), old, new)
@@ -2891,9 +2924,9 @@ class CustomMainWidget(QWidget):
     def removeModGroup(self, name: str) -> None:
         order = removeGroup(self.model.all(), orderedGroups(data.getConfig().groups, self.model.all()), name)
         self.output(
-            translate("MainWindow", "Removed the group")
+            translate("MainWindow", "Removed the separator")
             + f" {name}; "
-            + translate("MainWindow", "its mods are now ungrouped")
+            + translate("MainWindow", "its mods are now under Other mods")
         )
         self.saveGroups(order)
 
@@ -3166,9 +3199,6 @@ class CustomMainWidget(QWidget):
         self.actionOpenNexusPage = QAction(self.mainWindow)
         self.actionOpenNexusPage.setObjectName("actionOpenNexusPage")
 
-        self.actionEndorse = QAction(self.mainWindow)
-        self.actionEndorse.setObjectName("actionEndorse")
-
         self.actionDownloadHistory = QAction(self.mainWindow)
         self.actionDownloadHistory.setObjectName("actionDownloadHistory")
 
@@ -3324,7 +3354,6 @@ class CustomMainWidget(QWidget):
         self.menuNexus.addAction(self.actionSetNexusMod)
         self.menuNexus.addAction(self.actionChooseFile)
         self.menuNexus.addAction(self.actionOpenNexusPage)
-        self.menuNexus.addAction(self.actionEndorse)
         self.menuNexus.addAction(self.actionDownloadHistory)
         self.menuNexus.addAction(self.actionCleanUpArchives)
         self.menuNexus.addAction(self.actionRestoreBackup)
@@ -3381,6 +3410,11 @@ class CustomMainWidget(QWidget):
         self.treeWidget.headerItem().setText(12, translate("MainWindow", "Version"))
         self.treeWidget.headerItem().setText(13, translate("MainWindow", "Update"))
         self.treeWidget.headerItem().setText(14, translate("MainWindow", "Category"))
+        self.treeWidget.headerItem().setText(ENDORSE_COLUMN, "")
+        self.treeWidget.headerItem().setIcon(ENDORSE_COLUMN, icon("thumb"))
+        self.treeWidget.headerItem().setToolTip(
+            ENDORSE_COLUMN, translate("MainWindow", "Endorsed on Nexus. Click a thumb to endorse the mod.")
+        )
 
         self.loadOrder.headerItem().setText(0, translate("MainWindow", "Load Order"))
         self.loadOrder.headerItem().setToolTip(
@@ -3430,6 +3464,7 @@ class CustomMainWidget(QWidget):
         )
         self.actionScriptConflicts.setShortcut("F8")
         self.actionHealthCheck.setText(translate("MainWindow", "Health Check..."))
+        self.actionHealthCheck.setIconText(translate("MainWindow", "Health Check"))
         self.actionHealthCheck.setToolTip(translate("MainWindow", "Look for problems with the installed mods"))
         self.actionHealthCheck.setShortcut("F9")
         self.actionSelect_All_Mods.setText(translate("MainWindow", "Select All Mods"))
@@ -3491,8 +3526,8 @@ class CustomMainWidget(QWidget):
             translate("MainWindow", "Record which file of the Nexus page is installed, or switch to another file")
         )
         self.actionOpenNexusPage.setText(translate("MainWindow", "Open Nexus Page"))
-        self.actionEndorse.setText(translate("MainWindow", "Endorse Mods..."))
         self.actionDownloadHistory.setText(translate("MainWindow", "Download History..."))
+        self.actionDownloadHistory.setIconText(translate("MainWindow", "History"))
         self.actionSaveBackups.setText(translate("MainWindow", "Game Save Backups..."))
         self.actionSaveBackups.setToolTip(
             translate("MainWindow", "Copies of your newest saves, made before updates; back up or restore them")
@@ -3507,9 +3542,6 @@ class CustomMainWidget(QWidget):
         )
         self.actionDownloadHistory.setToolTip(
             translate("MainWindow", "Files downloaded from Nexus, what became of them, and installing them again")
-        )
-        self.actionEndorse.setToolTip(
-            translate("MainWindow", "See which of your mods you endorsed on Nexus, and endorse the ones you like")
         )
         self.actionOpenNexusPage.setShortcut("Ctrl+N")
         self.actionRestoreBackup.setText(translate("MainWindow", "Restore Previous Version..."))

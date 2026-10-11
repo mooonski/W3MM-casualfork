@@ -182,9 +182,14 @@ class MainWindowLayoutTests(LayoutTestCase):
         self.assertTrue(widget.forkLabel.isVisible())
         self.assertInside(widget.forkLabel, window)
         labels = [widget.treeWidget.headerItem().text(i) for i in range(widget.treeWidget.columnCount())]
-        self.assertEqual(len(labels), 15)
-        self.assertTrue(all(labels[1:]), labels)
-        self.assertEqual(labels[12:], ["Version", "Update", "Category"])
+        self.assertEqual(len(labels), 16)
+        self.assertTrue(all(labels[1:15]), labels)
+        self.assertEqual(labels[12:], ["Version", "Update", "Category", ""])
+        self.assertFalse(widget.treeWidget.headerItem().icon(15).isNull(), "the endorse column shows a thumb")
+        self.assertGreaterEqual(widget.treeWidget.header().sectionSize(15), 24)
+        toolbar = [action.iconText() for action in widget.toolBar.actions()]
+        self.assertIn("Health Check", toolbar)
+        self.assertIn("History", toolbar)
 
         right = widget.verticalSplitter_right
         self.assertLess(rectIn(widget.preview, right).bottom(), rectIn(widget.loadOrder, right).top())

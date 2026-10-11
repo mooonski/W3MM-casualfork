@@ -117,7 +117,7 @@ class GroupListTests(unittest.TestCase):
                 ("Visuals  (2)", False, True),
                 ("Combat  (1)", False, False),
                 ("Empty  (0)", False, True),
-                ("Ungrouped  (1)", False, True),
+                ("Other mods  (1)", False, True),
             ],
         )
         self.assertEqual([item.text(1) for item in self.widget.modItems()], ["Clouds", "Rain", "Blood", "Boat"])
@@ -131,7 +131,7 @@ class GroupListTests(unittest.TestCase):
         visuals = tree.topLevelItem(0)
         self.assertEqual([visuals.child(i).text(1) for i in range(2)], ["Rain", "Clouds"])
         tree.sortByColumn(1, Qt.SortOrder.AscendingOrder)
-        self.assertEqual([h[0] for h in self.headings()][-1], "Ungrouped  (1)")
+        self.assertEqual([h[0] for h in self.headings()][-1], "Other mods  (1)")
 
     def test_no_groups_means_a_plain_list(self):
         self.config.groups = []
@@ -197,25 +197,25 @@ class GroupListTests(unittest.TestCase):
         CustomMainWidget.removeModGroup(self.widget, "Visuals")
         self.assertEqual([m.group for m in self.mods], ["", "", "Fights", ""])
         self.assertEqual(self.config.groups, ["Fights", "Quests", "Empty"])
-        self.assertIn("Removed the group Visuals", self.widget.output.call_args.args[0])
+        self.assertIn("Removed the separator Visuals", self.widget.output.call_args.args[0])
 
     def test_menus(self):
         self.fill()
         self.widget.treeWidget.topLevelItem(0).child(0).setSelected(True)
         menu = CustomMainWidget.moveToGroupMenu(self.widget, None)
         labels = [action.text() for action in menu.actions() if not action.isSeparator()]
-        self.assertEqual(labels, ["Visuals", "Combat", "Empty", "New Group...", "Remove from Group"])
+        self.assertEqual(labels, ["Visuals", "Combat", "Empty", "New Separator...", "Remove from Separator"])
         self.assertTrue(menu.actions()[0].isChecked())
         menu.actions()[1].trigger()
         self.assertEqual(self.mods[0].group, "Combat")
         heading = QMenu()
         CustomMainWidget.fillGroupMenu(self.widget, heading, "Visuals")
         actions = {action.text(): action.isEnabled() for action in heading.actions() if not action.isSeparator()}
-        self.assertFalse(actions["Move Group Up"])
-        self.assertTrue(actions["Move Group Down"])
+        self.assertFalse(actions["Move Separator Up"])
+        self.assertTrue(actions["Move Separator Down"])
         ungrouped = QMenu()
         CustomMainWidget.fillGroupMenu(self.widget, ungrouped, "")
-        self.assertEqual([action.text() for action in ungrouped.actions()], ["New Group..."])
+        self.assertEqual([action.text() for action in ungrouped.actions()], ["Add Separator"])
 
     def test_group_item(self):
         item = GroupItem("Visuals", 0)

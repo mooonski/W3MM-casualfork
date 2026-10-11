@@ -518,6 +518,7 @@ class Configuration:
         self.set('WINDOW', 'section12', '70')
         self.set('WINDOW', 'section13', '90')
         self.set('WINDOW', 'section14', '110')
+        self.set('WINDOW', 'section15', '34')
 
     @staticmethod
     def getGameRoot(gamePath: str) -> str:

@@ -5,6 +5,12 @@ from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QApplication
 
+# a thumbs-up, outlined or filled
+THUMB = (
+    '<path fill="{fill}" d="M15 5.9 14 10h5.8a2 2 0 0 1 1.9 2.6l-2.3 8a2 2 0 0 1-1.9 1.4H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 '
+    '2-2h2.8a2 2 0 0 0 1.8-1.1L12 2a3.1 3.1 0 0 1 3 3.9z"/>'
+)
+
 # 24x24 drawings; "currentColor" is replaced by the theme's text colour
 SHAPES = {
     'add': '<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>',
@@ -25,6 +31,11 @@ SHAPES = {
     'sliders': '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/>'
     '<circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
     'order': '<path d="M11 6h9M11 12h9M11 18h9M6 4v16M3.5 6.5 6 4l2.5 2.5M3.5 17.5 6 20l2.5-2.5"/>',
+    'health': '<path d="M19 14c1.5-1.5 3-3.2 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.8 0-3 .5-4.5 2-1.5-1.5-2.7-2-4.5-2A5.5 5.5 0 0 0 '
+    '2 8.5c0 2.3 1.5 4 3 5.5l7 7z"/><path d="M3.2 12h6.3l.5-1 2 4.5 2-7 1.5 3.5h5.3"/>',
+    'history': '<path d="M3 12a9 9 0 1 0 9-9 9.8 9.8 0 0 0-6.7 2.7L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/>',
+    'thumb': '<path d="M7 10v12"/>' + THUMB.format(fill='none'),
+    'thumb-filled': THUMB.format(fill='currentColor'),
 }
 
 SIZES = (16, 20, 24, 32, 48)
@@ -52,13 +63,13 @@ def _pixmap(shape: str, color: QColor, size: int, ratio: float) -> QPixmap:
     return pixmap
 
 
-def icon(name: str, palette: QPalette | None = None) -> QIcon:
-    '''The named icon in the palette's button text colour (greyed when disabled)'''
+def icon(name: str, palette: QPalette | None = None, color: QColor | None = None) -> QIcon:
+    '''The named icon in the palette's button text colour, or the given colour (greyed when disabled)'''
     app = QApplication.instance()
     if palette is None:
         palette = app.palette() if isinstance(app, QApplication) else QPalette()
     ratio = app.devicePixelRatio() if isinstance(app, QApplication) else 1.0
-    normal = palette.color(QPalette.ColorGroup.Active, QPalette.ColorRole.ButtonText)
+    normal = color if color is not None else palette.color(QPalette.ColorGroup.Active, QPalette.ColorRole.ButtonText)
     disabled = palette.color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText)
     result = QIcon()
     for size in SIZES:

@@ -23,11 +23,7 @@ from src.core.updater import Backup, UpdateResult
 from src.domain.mod import Mod
 from src.gui.main_widget import CustomMainWidget
 from src.gui.nexus_dialogs import (
-    ABSTAIN,
-    ENDORSE,
     BackupsDialog,
-    EndorseDialog,
-    EndorseRow,
     NexusWorker,
     UpdateRow,
     UpdatesDialog,
@@ -521,78 +517,6 @@ class DialogTests(unittest.TestCase):
         self.assertIs(dialog.selected(), backups[0])
         self.assertEqual(dialog.list.item(1).text(), "2026-10-01  1.0  (update)")
         self.assertIsNone(BackupsDialog(None, "A", []).selected())
-
-
-class EndorseTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.app = QApplication.instance() or QApplication([])
-
-    def rows(self):
-        return [
-            EndorseRow(["Zed"], 3, "1.0", "Endorsed"),
-            EndorseRow(["Alpha", "Alpha extra"], 1, "2.0", ""),
-            EndorseRow(["Beta"], 2, "1.0", "Abstained"),
-        ]
-
-    def test_dialog_order_ticks_and_buttons(self):
-        rows = self.rows()
-        dialog = EndorseDialog(None, rows, [1])
-        items = [dialog.tree.topLevelItem(i) for i in range(dialog.tree.topLevelItemCount())]
-        self.assertEqual(
-            [(item.text(0), item.text(1)) for item in items],
-            [("Alpha, Alpha extra", "Not endorsed"), ("Beta", "Abstained"), ("Zed", "Endorsed")],
-        )
-        self.assertEqual(dialog.selection(), [rows[1]])
-        self.assertTrue(dialog.endorseButton.isEnabled())
-        items[0].setCheckState(0, Qt.CheckState.Unchecked)
-        self.assertFalse(dialog.endorseButton.isEnabled())
-        items[2].setCheckState(0, Qt.CheckState.Checked)
-        self.assertFalse(dialog.endorseButton.isEnabled())  # already endorsed
-        self.assertTrue(dialog.abstainButton.isEnabled())
-        dialog.abstainButton.click()
-        self.assertEqual(dialog.action, ABSTAIN)
-
-    def test_handlers(self):
-        widget = Mock()
-        widget.nexusBusy.return_value = False
-        widget.model.all.return_value = [
-            mod("Alpha", NexusInfo(1, version="2.0")),
-            mod("Alpha extra", NexusInfo(1)),
-            mod("Plain"),
-        ]
-        widget.model.modList = {m.name: m for m in widget.model.all.return_value}
-        widget.getSelectedMods.return_value = ["Alpha", "Plain"]
-        CustomMainWidget.endorseMods(widget)
-        work, done = widget.runNexus.call_args.args
-        client = widget.nexusClient.return_value
-        work(None)
-        client.endorsements.assert_called_once()
-        done({})
-        loaded = widget.endorsementsLoaded.call_args.args
-        self.assertEqual(
-            [(row.names, row.modId, row.version) for row in loaded[1]], [(["Alpha", "Alpha extra"], 1, "2.0")]
-        )
-        self.assertEqual(loaded[3], [1])
-
-        widget = Mock()
-        rows = [EndorseRow(["Alpha"], 1, "2.0", ""), EndorseRow(["Beta"], 2, "1.0", "")]
-        client = Mock()
-        client.endorse.side_effect = ["Endorsed", NexusError("Nexus only takes endorsements later.", 403)]
-        with patch("src.gui.main_widget.EndorseDialog") as dialog:
-            dialog.return_value.exec.return_value = True
-            dialog.return_value.action = ENDORSE
-            dialog.return_value.selection.return_value = rows
-            CustomMainWidget.endorsementsLoaded(widget, client, rows, {2: "Abstained", 3: "Endorsed"}, [1, 3])
-        self.assertEqual(dialog.call_args.args[2], [1])
-        self.assertEqual(rows[1].status, "Abstained")
-        work, done = widget.runNexus.call_args.args
-        results = work(lambda *args: None)
-        client.endorse.assert_any_call(1, "2.0", True)
-        CustomMainWidget.endorsementsSent(widget, results, True)
-        lines = [c.args[0] for c in widget.output.call_args_list]
-        self.assertIn("> Endorsed 1 mod: Alpha", lines)
-        self.assertIn("  Beta: Nexus only takes endorsements later.", lines)
 
 
 class ApiKeyTests(unittest.TestCase):

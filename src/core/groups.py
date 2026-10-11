@@ -55,3 +55,13 @@ def moveGroup(order: list[str], name: str, offset: int) -> list[str]:
     index = max(0, min(len(result), order.index(name) + offset))
     result.insert(index, name)
     return result
+
+
+def uniqueName(base: str, taken: Iterable[str]) -> str:
+    '''base, or "base 2", "base 3"... whichever isn't taken yet'''
+    taken = set(taken)
+    name, number = base, 2
+    while name in taken:
+        name = f"{base} {number}"
+        number += 1
+    return name
