@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
+    QLabel,
     QLineEdit,
     QMainWindow,
     QMenu,
@@ -243,6 +244,13 @@ class CustomMainWidget(QWidget):
         self.menubar.setGeometry(QRect(0, 0, 583, 21))
         self.menubar.setObjectName("menubar")
         self.mainWindow.setMenuBar(self.menubar)
+        # says which build this is, top right of the menu bar
+        self.forkLabel = QLabel(FORK_VERSION, self.menubar)
+        self.forkLabel.setObjectName("forkLabel")
+        self.forkLabel.setToolTip(getVersionString())
+        self.forkLabel.setContentsMargins(0, 0, 10, 0)
+        self.forkLabel.setStyleSheet(f"color: {statusColor('muted').name()};")
+        self.menubar.setCornerWidget(self.forkLabel, Qt.Corner.TopRightCorner)
 
         self.toolBar = QToolBar(self.mainWindow)
         self.toolBar.setObjectName("toolBar")
@@ -2741,7 +2749,7 @@ class CustomMainWidget(QWidget):
         self.menuSettings.addAction(self.menuConfigure_Settings.menuAction())
 
     def translateUi(self):
-        self.mainWindow.setWindowTitle(translate("MainWindow", TITLE))
+        self.mainWindow.setWindowTitle(translate("MainWindow", TITLE) + f" ({FORK_VERSION})")
 
         self.treeWidget.headerItem().setText(0, translate("MainWindow", "Enabled"))
         self.treeWidget.headerItem().setText(1, translate("MainWindow", "Mod Name"))

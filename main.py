@@ -27,9 +27,54 @@ def logStartupFailure(details: str) -> str | None:
     return log_path
 
 
+def logWithoutConsole(arguments: list[str]) -> str | None:
+    '''Started without a console (pythonw or a shortcut), what the program prints would be lost, so it goes to
+    W3MM.log in the configuration folder instead. The previous run's log is kept as W3MM.previous.log.'''
+    if sys.stdout is not None and sys.stderr is not None:
+        return None
+    import os
+    import time
+
+    folder = ''
+    for flag in ("-c", "--config"):
+        if flag in arguments[:-1]:
+            folder = arguments[arguments.index(flag) + 1]
+    if not folder:
+        folder = path.join(environ.get("LOCALAPPDATA") or tempfile.gettempdir(), "The Witcher 3 Mod Manager")
+    try:
+        os.makedirs(folder, exist_ok=True)
+        log = path.join(folder, "W3MM.log")
+        if path.exists(log):
+            os.replace(log, path.join(folder, "W3MM.previous.log"))
+        stream = open(log, "w", encoding="utf-8", buffering=1)
+    except OSError:
+        return None
+    stream.write(f"started {time.strftime('%Y-%m-%d %H:%M:%S')}: {' '.join(arguments)}\n")
+    sys.stdout = sys.stdout or stream
+    sys.stderr = sys.stderr or stream
+    return log
+
+
+def useOwnTaskbarIcon(appId: str) -> None:
+    '''Without its own app id, Windows shows the program under Python's taskbar icon'''
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(appId)
+    except (AttributeError, OSError):
+        pass
+
+
 if __name__ == "__main__":
+    logWithoutConsole(sys.argv)
     try:
         from PySide6.QtWidgets import QApplication, QMessageBox
+
+        from src.globals.constants import APP_ID
+
+        useOwnTaskbarIcon(APP_ID)
 
         from src.configuration.config import Configuration
         from src.core.model import Model
@@ -156,7 +201,7 @@ if __name__ == "__main__":
         mainWidget = CustomMainWidget(mainWindow, modModel)
         mainWidget.checkTheme()
         mainWindow.dropCallback = mainWidget.installModFiles
-        data.app.setWindowIcon(getIcon("w3a.ico"))
+        data.app.setWindowIcon(getIcon("w3mm-fork.ico"))
 
         from PySide6.QtCore import QTimer
 

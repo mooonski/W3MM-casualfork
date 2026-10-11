@@ -168,6 +168,10 @@ class MainWindowLayoutTests(LayoutTestCase):
         actions = widget.toolBar.actions()
         self.assertEqual(actions.index(widget.actionRun_Script_Merger), actions.index(widget.actionCheckUpdates) + 1)
         self.assertEqual(widget.actionRun_Script_Merger.iconText(), "Script Merger")
+        self.assertIn("(casual fork 0.1)", window.windowTitle())
+        self.assertIs(widget.menubar.cornerWidget(Qt.Corner.TopRightCorner), widget.forkLabel)
+        self.assertTrue(widget.forkLabel.isVisible())
+        self.assertInside(widget.forkLabel, window)
         labels = [widget.treeWidget.headerItem().text(i) for i in range(widget.treeWidget.columnCount())]
         self.assertEqual(len(labels), 15)
         self.assertTrue(all(labels[1:]), labels)

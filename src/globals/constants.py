@@ -5,6 +5,10 @@ from PySide6.QtCore import QCoreApplication
 translate = QCoreApplication.translate
 
 VERSION = "0.10.5"
+# this fork of W3MM (Nexus updates, RMMR import, Script Merger checks); shown next to the upstream version
+FORK_VERSION = "casual fork 0.1"
+# Windows groups taskbar buttons by this, so the app gets its own icon instead of Python's
+APP_ID = "W3MM.casualfork"
 TITLE = translate("GLOBALS", "The Witcher 3 Mod Manager")
 AUTHORS = [
     "Stefan Kostic (stefan3372)",
