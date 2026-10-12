@@ -137,14 +137,7 @@ from src.gui.requirements_dialog import RequirementsDialog
 from src.gui.saves_dialog import SaveBackupsDialog
 from src.gui.scriptmerger_dialog import MessageAlertScriptConflicts, ScriptConflictsDialog
 from src.gui.settings_dialog import KEYS_TAB, USER_TAB, GameSettingsDialog
-from src.gui.themes import (
-    MODIO_BACKGROUND,
-    MODIO_TEXT,
-    get_dark_palette,
-    get_light_palette,
-    get_system_palette,
-    statusColor,
-)
+from src.gui.themes import get_dark_palette, get_light_palette, get_system_palette, statusColor
 from src.gui.tree_widget import (
     GROUP_ROLE,
     MODIO_ROLE,
@@ -3203,8 +3196,7 @@ class CustomMainWidget(QWidget):
         font.setBold(True)
         row.setFont(1, font)
         for column in range(row.columnCount()):
-            row.setBackground(column, QBrush(MODIO_BACKGROUND))
-            row.setForeground(column, QBrush(MODIO_TEXT))
+            row.setForeground(column, QBrush(statusColor("modio")))
         lines = [modio.title]
         if modio.author:
             lines[0] += " " + translate("MainWindow", "by") + f" {modio.author}"

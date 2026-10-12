@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QTreeWidget
 from src.core.modio import CONFIG_FILE, ModioMod, installedModioMods, readConfig, readState
 from src.domain.mod import Mod
 from src.gui.main_widget import CustomMainWidget
-from src.gui.themes import MODIO_BACKGROUND, MODIO_TEXT
+from src.gui.themes import statusColor
 from src.gui.tree_widget import ModTree, isModioItem
 
 # the game writes every mod under the same key
@@ -162,8 +162,8 @@ class ModListTests(unittest.TestCase):
         self.assertFalse(letho.flags() & Qt.ItemFlag.ItemIsDragEnabled)
         self.assertFalse(letho.flags() & Qt.ItemFlag.ItemIsDropEnabled)
         for column in range(16):
-            self.assertEqual(letho.background(column).color(), MODIO_BACKGROUND)
-            self.assertEqual(letho.foreground(column).color(), MODIO_TEXT)
+            self.assertEqual(letho.background(column).style(), Qt.BrushStyle.NoBrush)
+            self.assertEqual(letho.foreground(column).color(), statusColor("modio"))
         self.assertTrue(letho.font(1).bold())
         self.assertIn("by Ard Carraigh", letho.toolTip(1))
         self.assertIn("in the game's own mod menu (on, mod.io order 0)", letho.toolTip(5))
