@@ -115,6 +115,7 @@ from src.gui.archives_dialog import RECYCLE, ArchiveCleanupDialog, sizeText
 from src.gui.browse_widget import BrowseWidget
 from src.gui.conflicts_dialog import FileConflictsDialog
 from src.gui.details_dialog import DetailsDialog
+from src.gui.downloads_widget import DownloadsWidget
 from src.gui.health_dialog import HealthDialog
 from src.gui.history_dialog import DownloadHistoryDialog
 from src.gui.icons import icon
@@ -345,6 +346,16 @@ class CustomMainWidget(QWidget):
         # Setup tree widget
         self.setupTreeWidget()
         self.tabs.addTab(self.installedTab, translate("MainWindow", "Installed"))
+
+        # archives downloaded but not installed
+        self.detailsAsked: set[int] = set()
+        self.downloads = DownloadsWidget(
+            self.tabs, self.nexusDetails, self.scanDownloads, data.getConfig().gameversion == "re"
+        )
+        self.downloads.installRequested.connect(self.installModFiles)
+        self.downloads.countChanged.connect(self.downloadsCounted)
+        self.downloads.detailsWanted.connect(self.downloadDetailsWanted)
+        self.tabs.addTab(self.downloads, translate("MainWindow", "Not Installed"))
 
         self.browse = BrowseWidget(
             self.tabs, self.nexusDetails, lambda: set(self.linkedModIds()), data.getConfig().gameversion == "re"
@@ -2451,11 +2462,14 @@ class CustomMainWidget(QWidget):
         remastered = data.getConfig().gameversion == "re"
         self.preview.showMod(mod, details, self.nexusDetails.image(details), remastered)
 
-    def refreshNexusDetails(self, silent: bool = False, onlyMissing: bool = False) -> None:
-        '''Fetches pictures, categories and summaries of the linked mods in the background'''
+    def refreshNexusDetails(
+        self, silent: bool = False, onlyMissing: bool = False, modIds: list[int] | None = None
+    ) -> None:
+        '''Fetches pictures, categories and summaries of the linked mods (or of modIds) in the background'''
         if self.detailsWorker is not None and self.detailsWorker.isRunning():
             return
-        modIds = self.nexusDetails.missing(self.linkedModIds()) if onlyMissing else self.linkedModIds()
+        if modIds is None:
+            modIds = self.nexusDetails.missing(self.linkedModIds()) if onlyMissing else self.linkedModIds()
         if not modIds:
             if not silent:
                 self.output(translate("MainWindow", "No mods with a Nexus ID."))
@@ -2542,6 +2556,30 @@ class CustomMainWidget(QWidget):
         )
         for archivePath, error in failed:
             self.output(f"  {path.basename(archivePath)}: {error}")
+
+    # The Not Installed tab
+
+    def scanDownloads(self) -> tuple[str, list]:
+        folder = data.getConfig().archives or ""
+        tools = {nexusId(data.getConfig().gameversion): "Script Merger"}
+        return folder, scanArchives(folder, self.model, tools)
+
+    @debounceGui(300)
+    def refreshDownloads(self) -> None:
+        self.downloads.refresh()
+
+    def downloadsCounted(self, count: int) -> None:
+        index = self.tabs.indexOf(self.downloads)
+        label = translate("MainWindow", "Not Installed")
+        self.tabs.setTabText(index, f"{label} ({count})" if count else label)
+
+    def downloadDetailsWanted(self, modIds: list[int]) -> None:
+        '''Loads the Nexus names and pictures of downloaded mods, once a session for each'''
+        wanted = [modId for modId in modIds if modId not in self.detailsAsked]
+        if not wanted or (self.detailsWorker is not None and self.detailsWorker.isRunning()):
+            return
+        self.detailsAsked.update(wanted)
+        self.refreshNexusDetails(silent=True, modIds=wanted)
 
     def showDownloadHistory(self) -> None:
         self.downloadHistory.load()
@@ -2910,6 +2948,7 @@ class CustomMainWidget(QWidget):
             if write:
                 self.refreshLoadOrder()
                 self.model.write()
+                self.refreshDownloads()
         except Exception as err:
             self.output(translate("MainWindow", "Couldn't refresh list: ") + f"{formatUserError(err)}")
             return err

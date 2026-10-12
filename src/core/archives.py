@@ -37,6 +37,7 @@ class ArchiveInfo:
     mod: str = ''  # the installed mod it belongs to
     note: str = ''
     onlyCopy: bool = False  # the installed version's archive isn't in the folder, so this is the only one left
+    tool: bool = False  # a download of a tool (a mod manager, Script Merger), not a mod
 
     @property
     def name(self) -> str:
@@ -116,8 +117,9 @@ def _classify(
     _, modId, version = parsed
     installed = byModId.get(modId) or []
     if not installed:
-        note = f"{tools[modId]} download" if modId in tools else 'No installed mod comes from this Nexus page'
-        return ArchiveInfo(full, size, NOT_INSTALLED, note=note)
+        if modId in tools:
+            return ArchiveInfo(full, size, NOT_INSTALLED, note=f"{tools[modId]} download", tool=True)
+        return ArchiveInfo(full, size, NOT_INSTALLED, note='No installed mod comes from this Nexus page')
     line = _nameLine(name)
     uploaded = archiveUploadTime(name)
     for mod in installed:
@@ -136,6 +138,21 @@ def _classify(
     return ArchiveInfo(
         full, size, OTHER_FILE, installed[0].name, 'Another file from the Nexus page of an installed mod'
     )
+
+
+def notInstalled(archives: list[ArchiveInfo], otherFiles: bool = True) -> list[ArchiveInfo]:
+    '''The downloaded archives nothing was installed from: mods from Nexus pages no installed mod comes from,
+    archives no installed mod looks like, and (with otherFiles) other files from the pages of installed mods.
+    Tools such as mod managers are left out.'''
+    found = []
+    for archive in archives:
+        if archive.tool:
+            continue
+        if archive.state == NOT_INSTALLED or (archive.state == UNKNOWN and not archive.mod):
+            found.append(archive)
+        elif otherFiles and archive.state == OTHER_FILE:
+            found.append(archive)
+    return found
 
 
 def _size(path: str) -> int:

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from src.core.nexusdetails import DetailsCache, ModDetails
 from src.gui.browse_widget import BrowseWidget
+from src.gui.downloads_widget import DownloadsWidget
 from src.gui.mod_preview import IMAGE_HEIGHT, ModPreview
 
 SHORT = ModDetails(1, "Short", summary="One line.", category="Armour", version="1")
@@ -116,6 +117,22 @@ class PreviewLayoutTests(LayoutTestCase):
         self.assertAlmostEqual(shown.width() / shown.height(), 1600 / 900, delta=0.02)
 
 
+class DownloadsLayoutTests(LayoutTestCase):
+    def test_list_preview_and_buttons_fit(self):
+        with tempfile.TemporaryDirectory() as folder:
+            downloads = offscreen(DownloadsWidget(None, DetailsCache(folder), lambda: (folder, []), True), 1100, 300)
+            self.addCleanup(downloads.close)
+            downloads.refresh()
+            settle(self.app)
+            for widget in (downloads.searchBox, downloads.otherFilesBox, downloads.refreshButton, downloads.tree):
+                self.assertInside(widget, downloads)
+            buttons = [downloads.folderButton, downloads.pageButton, downloads.recycleButton, downloads.installButton]
+            for widget in [downloads.preview, downloads.status, *buttons]:
+                self.assertInside(widget, downloads)
+            self.assertNoOverlap([downloads.tree, downloads.preview], downloads)
+            self.assertNoOverlap([downloads.status, *buttons], downloads)
+
+
 class BrowseLayoutTests(LayoutTestCase):
     def test_results_preview_and_buttons_fit(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -164,7 +181,8 @@ class MainWindowLayoutTests(LayoutTestCase):
                         QTest.qWait(300)
 
     def checkMainWindow(self, window, widget) -> None:
-        self.assertEqual([widget.tabs.tabText(i) for i in range(widget.tabs.count())], ["Installed", "Browse Nexus"])
+        tabs = [widget.tabs.tabText(i).split(" (")[0] for i in range(widget.tabs.count())]
+        self.assertEqual(tabs, ["Installed", "Not Installed", "Browse Nexus"])
         actions = widget.toolBar.actions()
         first = actions.index(widget.actionCheckUpdates)
         self.assertEqual(
