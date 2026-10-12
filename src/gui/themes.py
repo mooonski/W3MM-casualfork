@@ -81,6 +81,10 @@ STATUS_COLORS = {
     'ok': (QColor(120, 190, 120), QColor(30, 120, 50)),
 }
 
+# rows for mods the game installed from mod.io: bright blue in either theme, with white text that reads on it
+MODIO_BACKGROUND = QColor(0, 120, 255)
+MODIO_TEXT = QColor(255, 255, 255)
+
 
 def isDark(palette: QPalette | None = None) -> bool:
     if palette is None:

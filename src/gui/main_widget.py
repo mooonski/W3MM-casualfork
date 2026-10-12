@@ -72,6 +72,7 @@ from src.core.history import INSTALLED, KEPT, LINK, REINSTALL, UPDATE, UPDATED, 
 from src.core.installer import Installer
 from src.core.loadorder import moveFolder, prioritiesFor
 from src.core.model import Model
+from src.core.modio import ModioMod, installedModioMods
 from src.core.nexus import (
     ENDORSED,
     FAILED,
@@ -136,8 +137,23 @@ from src.gui.requirements_dialog import RequirementsDialog
 from src.gui.saves_dialog import SaveBackupsDialog
 from src.gui.scriptmerger_dialog import MessageAlertScriptConflicts, ScriptConflictsDialog
 from src.gui.settings_dialog import KEYS_TAB, USER_TAB, GameSettingsDialog
-from src.gui.themes import get_dark_palette, get_light_palette, get_system_palette, statusColor
-from src.gui.tree_widget import GROUP_ROLE, CustomTreeWidgetItem, GroupItem, ModTree, isGroupItem
+from src.gui.themes import (
+    MODIO_BACKGROUND,
+    MODIO_TEXT,
+    get_dark_palette,
+    get_light_palette,
+    get_system_palette,
+    statusColor,
+)
+from src.gui.tree_widget import (
+    GROUP_ROLE,
+    MODIO_ROLE,
+    CustomTreeWidgetItem,
+    GroupItem,
+    ModTree,
+    isGroupItem,
+    isModioItem,
+)
 from src.util.syntax import *
 from src.util.util import *
 
@@ -706,6 +722,10 @@ class CustomMainWidget(QWidget):
             self.fillGroupMenu(menu, clicked.data(0, GROUP_ROLE))
             menu.exec(self.treeWidget.viewport().mapToGlobal(position))
             return
+        if isModioItem(clicked):
+            self.fillModioMenu(menu, clicked)
+            menu.exec(self.treeWidget.viewport().mapToGlobal(position))
+            return
         menu.addAction(self.actionDetails)
         menu.addSeparator()
         menu.addAction(self.actionSetPriority)
@@ -862,7 +882,7 @@ class CustomMainWidget(QWidget):
         """Triggered when the mod check state is changed.
         Enables or disables the mod based on the current check state"""
         # other columns change too (icons, colours) and have no tick to read
-        if column != 0 or isGroupItem(item):
+        if column != 0 or isGroupItem(item) or isModioItem(item):
             return
         mod = self.model.modList.get(item.text(1))
         if mod is None or (item.checkState(0) == Qt.CheckState.Checked) == mod.enabled:
@@ -1574,7 +1594,9 @@ class CustomMainWidget(QWidget):
     def enableDisableMods(self):
         '''Changes checked state of the selected mods'''
         try:
-            selected = [item for item in self.treeWidget.selectedItems() if not isGroupItem(item)]
+            selected = [
+                item for item in self.treeWidget.selectedItems() if not isGroupItem(item) and not isModioItem(item)
+            ]
             if not selected:
                 return
             self.setProgress(0)
@@ -2626,7 +2648,7 @@ class CustomMainWidget(QWidget):
         self.showEndorsements()
 
     def modClicked(self, item, column: int) -> None:
-        if column == ENDORSE_COLUMN and not isGroupItem(item):
+        if column == ENDORSE_COLUMN and not isGroupItem(item) and not isModioItem(item):
             self.toggleEndorsement(item.text(1))
 
     def toggleEndorsement(self, name: str) -> None:
@@ -2939,6 +2961,7 @@ class CustomMainWidget(QWidget):
                         + "\n"
                         + "\n".join(f"{mod.name} {reason}" for reason in duplicates[mod.name]),
                     )
+            self.addModioRows(headers.get(""))
             self.finishGroupHeaders(headers)
             for item in selected:
                 rows = self.treeWidget.findItems(item, Qt.MatchFlag.MatchEndsWith | Qt.MatchFlag.MatchRecursive, 1)
@@ -3141,9 +3164,70 @@ class CustomMainWidget(QWidget):
         getSelected = self.treeWidget.selectedItems()
         if getSelected:
             for selected in getSelected:
-                if not isGroupItem(selected):
+                if not isGroupItem(selected) and not isModioItem(selected):
                     array.append(selected.text(1))
         return array
+
+    # Mods the game installed from mod.io: shown so the list is complete, but the game manages them
+
+    def addModioRows(self, parent) -> None:
+        for modio in installedModioMods(data.getConfig().settings):
+            if self.searchString and self.searchString.lower() not in modio.label.lower():
+                continue
+            row = self.addToList(
+                modio.enabled,
+                modio.label,
+                "-",
+                len(modio.folders),
+                0,
+                0,
+                0,
+                0,
+                0,
+                "-",
+                modio.size,
+                modio.date,
+                modio.version,
+                parent=parent,
+            )
+            self.showModio(row, modio)
+
+    def showModio(self, row, modio: ModioMod) -> None:
+        # marked first, so the changes below (each one signals itemChanged) are never taken for a mod being toggled
+        row.setData(0, MODIO_ROLE, modio.modId)
+        # the tick shows whether the game has it on, but only the game's mod.io menu can change that
+        row.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+        row.setData(1, Qt.ItemDataRole.UserRole, modio.url)
+        row.setData(1, Qt.ItemDataRole.UserRole + 1, modio.path)
+        font = row.font(1)
+        font.setBold(True)
+        row.setFont(1, font)
+        for column in range(row.columnCount()):
+            row.setBackground(column, QBrush(MODIO_BACKGROUND))
+            row.setForeground(column, QBrush(MODIO_TEXT))
+        lines = [modio.title]
+        if modio.author:
+            lines[0] += " " + translate("MainWindow", "by") + f" {modio.author}"
+        if modio.summary:
+            lines.append(modio.summary)
+        state = translate("MainWindow", "on") if modio.enabled else translate("MainWindow", "off")
+        if modio.priority is not None:
+            state += f", {translate('MainWindow', 'mod.io order')} {modio.priority}"
+        lines.append(translate("MainWindow", "Installed from mod.io in the game's own mod menu") + f" ({state}).")
+        lines.append(translate("MainWindow", "Turn it on or off, update or remove it there."))
+        if modio.folders:
+            lines.append(translate("MainWindow", "Folders:") + " " + ", ".join(modio.folders))
+        tooltip = "\n".join(lines)
+        for column in range(row.columnCount()):
+            row.setToolTip(column, tooltip)
+
+    def fillModioMenu(self, menu: QMenu, item) -> None:
+        url = item.data(1, Qt.ItemDataRole.UserRole)
+        path = item.data(1, Qt.ItemDataRole.UserRole + 1)
+        page = menu.addAction(translate("MainWindow", "Open mod.io Page"), lambda: openUrl(url))
+        page.setEnabled(bool(url))
+        folder = menu.addAction(translate("MainWindow", "Open Folder"), lambda: openFolder(path))
+        folder.setEnabled(bool(path) and os.path.isdir(path))
 
     # Groups in the mod list
 
@@ -3156,7 +3240,7 @@ class CustomMainWidget(QWidget):
                 items += [item.child(child) for child in range(item.childCount())]
             elif item is not None:
                 items.append(item)
-        return items
+        return [item for item in items if not isModioItem(item)]
 
     def groupHeaders(self) -> dict:
         """Headings for the mod list's groups (and one for mods without a group), or none when no group exists"""

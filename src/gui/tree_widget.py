@@ -8,6 +8,8 @@ from PySide6.QtWidgets import QAbstractItemView, QApplication, QTreeWidget, QTre
 
 # holds the group name on a group heading in the mod list
 GROUP_ROLE = Qt.ItemDataRole.UserRole + 7
+# holds the mod.io mod ID on a row for a mod the game installed from mod.io (shown, never managed)
+MODIO_ROLE = Qt.ItemDataRole.UserRole + 8
 
 
 class CustomTreeWidgetItem(QTreeWidgetItem):
@@ -62,6 +64,10 @@ class GroupItem(CustomTreeWidgetItem):
 
 def isGroupItem(item: QTreeWidgetItem | None) -> bool:
     return item is not None and item.data(0, GROUP_ROLE) is not None
+
+
+def isModioItem(item: QTreeWidgetItem | None) -> bool:
+    return item is not None and item.data(0, MODIO_ROLE) is not None
 
 
 def groupOf(item: QTreeWidgetItem | None) -> str | None:
@@ -133,7 +139,7 @@ class ModTree(QTreeWidget):
         return [self.topLevelItem(i) for i in range(self.topLevelItemCount()) if isGroupItem(self.topLevelItem(i))]
 
     def modRows(self) -> list:
-        """The mod rows in the order they are shown"""
+        """The mod rows in the order they are shown (not mod.io's, which the game manages)"""
         rows = []
         for index in range(self.topLevelItemCount()):
             item = self.topLevelItem(index)
@@ -141,7 +147,7 @@ class ModTree(QTreeWidget):
                 rows += [item.child(child) for child in range(item.childCount())]
             else:
                 rows.append(item)
-        return rows
+        return [row for row in rows if not isModioItem(row)]
 
     def namesIn(self, group: str) -> list[str]:
         """The mods shown under a separator ("" is Other mods, or the whole list without separators)"""
