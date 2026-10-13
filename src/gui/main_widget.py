@@ -283,7 +283,19 @@ class CustomMainWidget(QWidget):
         '''Handle external mods.settings changes'''
         if data.getConfig().write_priority_elapsed() < 350:
             return
-        self.refreshLoadOrder()
+        self.reloadPrioritiesSoon()
+
+    @debounceGui(300)
+    def reloadPrioritiesSoon(self):
+        '''Editors can save in more than one step, so this waits for the file to settle'''
+        self.reloadPriorities()
+
+    def reloadPriorities(self):
+        '''Reads mods.settings again and shows its priorities in the mod list as well as the load order'''
+        data.getConfig().readPriority()
+        for mod in self.model.all():
+            mod.syncPriority()
+        self.refreshList()
 
     def restoreWindowState(self):
         '''Restore the toolbar position/layout saved from a previous session'''
@@ -508,7 +520,7 @@ class CustomMainWidget(QWidget):
         self.actionReinstallFiles.triggered.connect(self.reinstallFromArchives)
         self.actionAbout.triggered.connect(showAboutWindow)
         self.actionEnable_Disable_Mods.triggered.connect(self.enableDisableMods)
-        self.actionRefresh_Mod_List.triggered.connect(lambda e: self.refreshList())
+        self.actionRefresh_Mod_List.triggered.connect(lambda e: self.reloadPriorities())
         self.actionRefresh_Load_Order.triggered.connect(lambda e: self.refreshLoadOrder())
         self.actionScriptConflicts.triggered.connect(self.showScriptConflicts)
         self.actionFileConflicts.triggered.connect(self.showFileConflicts)
@@ -677,6 +689,11 @@ class CustomMainWidget(QWidget):
         )
         self.toolBar.addAction(actionTemp)
 
+        self.actionRefresh_Mod_List.setToolTip(
+            translate("MainWindow", "Read mods.settings and the mods again, e.g. after editing them outside (F5)")
+        )
+        self.toolBar.addAction(self.actionRefresh_Mod_List)
+
         self.toolBar.addSeparator()
 
         self.builtInToolbarActions = len(self.toolBar.actions())
@@ -697,6 +714,7 @@ class CustomMainWidget(QWidget):
             (self.actionRun_Script_Merger, "merge"),
             (self.actionHealthCheck, "health"),
             (self.actionDownloadHistory, "history"),
+            (self.actionRefresh_Mod_List, "refresh"),
         ):
             action.setIcon(icon(name))
             action.setIconVisibleInMenu(False)

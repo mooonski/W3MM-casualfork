@@ -225,7 +225,11 @@ class Model:
             except ValueError:
                 print('could not read nexus details of', mod.name)
 
-        mod.checkPriority()
+        if data.getConfig().priority.sections():
+            # the game loads by mods.settings, so it wins over the copy kept in installed.xml
+            mod.syncPriority()
+        else:
+            mod.checkPriority()
         return mod
 
     @staticmethod

@@ -36,6 +36,7 @@ class InstalledFileSafetyTests(unittest.TestCase):
             menu=str(self.game / "bin"),
             settings=str(self.root),
             configuration=str(self.root / "Manager"),
+            priority=configparser.ConfigParser(),
         )
         Path(self.config.configuration).mkdir()
         config_patch = patch("src.globals.data.config", self.config)
@@ -797,7 +798,8 @@ class ModConfigurationTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.config = SimpleNamespace(
-            game=str(self.root), menu=str(self.root), settings=str(self.root), gameversion='re'
+            game=str(self.root), menu=str(self.root), settings=str(self.root), gameversion='re',
+            priority=configparser.ConfigParser(),
         )
         config_patch = patch('src.domain.mod.data.config', self.config)
         config_patch.start()
@@ -999,7 +1001,7 @@ class InventoryPersistenceTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        self.config = SimpleNamespace(configuration=str(self.root))
+        self.config = SimpleNamespace(configuration=str(self.root), priority=configparser.ConfigParser())
         config_patch = patch("src.core.model.data.config", self.config)
         config_patch.start()
         self.addCleanup(config_patch.stop)

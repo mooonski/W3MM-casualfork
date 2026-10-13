@@ -202,10 +202,19 @@ class Mod:
         return [self.binTarget(relative) for relative in self.bins] if data.getConfig().game else []
 
     def checkPriority(self):
-        if not self.priority:
+        if not self._priority:
             for filedata in iter(self.files):
                 if data.getConfig().priority.has_section(filedata):
                     self.priority = data.getConfig().getPriority(filedata)
+
+    def syncPriority(self):
+        '''Takes the priority from mods.settings as it was last read (the game uses that one), without writing it'''
+        self._priority = None
+        for filedata in iter(self.files):
+            value = data.getConfig().getPriority(filedata)
+            if value is not None and str(value).strip().isdecimal():
+                self._priority = str(int(value))
+                return
 
     def installMenus(self):
         self.updateMenuFileLists(install=True)

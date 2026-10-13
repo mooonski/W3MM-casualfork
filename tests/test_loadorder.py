@@ -1,6 +1,8 @@
+import configparser
 import random
 import tempfile
 import unittest
+import xml.etree.ElementTree as XML
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -10,6 +12,7 @@ from PySide6.QtWidgets import QAbstractItemView, QApplication, QTreeWidgetItem
 
 from src.core.conflicts import loadOrder
 from src.core.loadorder import moveFolder, prioritiesFor
+from src.core.model import Model
 from src.domain.mod import Mod
 from src.gui.load_order_tree import LoadOrderTree
 from src.gui.main_widget import CustomMainWidget, priorityNumber
@@ -138,6 +141,86 @@ class LoadOrderTreeTests(unittest.TestCase):
             config.write_priority.assert_called_once()
             CustomMainWidget.loadOrderMoved(widget, "~modOff", 0)
             config.write_priority.assert_called_once()
+
+
+class PrioritiesConfig:
+    '''Just the mods.settings side of the configuration'''
+
+    def __init__(self, text: str = ""):
+        self.priority = configparser.ConfigParser()
+        self.priority.read_string(text)
+        self.readPriority = Mock()
+        self.write_priority = Mock()
+        self.elapsed = 10_000.0
+
+    def getPriority(self, section):
+        return self.priority.get(section, "priority", fallback=None)
+
+    def setPriority(self, section, value):
+        if not self.priority.has_section(section):
+            self.priority.add_section(section)
+        self.priority.set(section, "priority", value)
+
+    def removePriority(self, section):
+        self.priority.remove_section(section)
+
+    def write_priority_elapsed(self):
+        return self.elapsed
+
+
+class PrioritySyncTests(unittest.TestCase):
+    '''The mod list shows the priorities from mods.settings, which the game uses'''
+
+    def setUp(self):
+        self.config = PrioritiesConfig("[modA]\nEnabled=1\nPriority=5\n\n[modB]\nEnabled=1\nPriority=x\n")
+        configPatch = unittest.mock.patch("src.globals.data.config", self.config)
+        configPatch.start()
+        self.addCleanup(configPatch.stop)
+
+    def test_sync_takes_the_number_without_writing(self):
+        mod = Mod(files=["modA"], _priority="2")
+        mod.syncPriority()
+        self.assertEqual(mod.priority, "5")
+        for files in (["modB"], ["modMissing"], []):
+            mod = Mod(files=files, _priority="2")
+            mod.syncPriority()
+            self.assertEqual(mod.priority, "-")
+        self.config.write_priority.assert_not_called()
+        self.assertEqual(self.config.getPriority("modA"), "5")
+
+    def test_check_only_fills_a_missing_priority(self):
+        mod = Mod(files=["modA"])
+        mod.checkPriority()
+        self.assertEqual(mod.priority, "5")
+        mod = Mod(files=["modA"], _priority="2")
+        mod.checkPriority()
+        self.assertEqual(mod.priority, "2")
+
+    def test_loading_installed_xml_prefers_mods_settings(self):
+        element = XML.fromstring('<mod name="A" enabled="True" priority="2"><data>modA</data></mod>')
+        self.assertEqual(Model.populateModFromXml(Mod(), element).priority, "5")
+        element = XML.fromstring('<mod name="C" enabled="True" priority="2"><data>modC</data></mod>')
+        self.assertEqual(Model.populateModFromXml(Mod(), element).priority, "-")
+        # without a mods.settings to go by, installed.xml's copy stays
+        self.config.priority = configparser.ConfigParser()
+        self.assertEqual(Model.populateModFromXml(Mod(), element).priority, "2")
+
+    def test_reload_reads_the_file_and_refreshes_both_lists(self):
+        widget = Mock()
+        mods = [Mod(files=["modA"], _priority="2"), Mod(files=["modC"], _priority="7")]
+        widget.model.all.return_value = mods
+        CustomMainWidget.reloadPriorities(widget)
+        self.config.readPriority.assert_called_once()
+        self.assertEqual([mod.priority for mod in mods], ["5", "-"])
+        widget.refreshList.assert_called_once_with()
+
+    def test_outside_changes_reload_but_own_writes_dont(self):
+        widget = Mock()
+        CustomMainWidget.onModsSettingsChanged(widget)
+        widget.reloadPrioritiesSoon.assert_called_once()
+        self.config.elapsed = 100.0
+        CustomMainWidget.onModsSettingsChanged(widget)
+        widget.reloadPrioritiesSoon.assert_called_once()
 
 
 if __name__ == "__main__":

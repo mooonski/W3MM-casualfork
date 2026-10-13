@@ -1,4 +1,5 @@
 import calendar
+import configparser
 import hashlib
 import json
 import tempfile
@@ -209,7 +210,7 @@ class PlanTests(unittest.TestCase):
             menu=str(game / "bin/config/r4game/user_config_matrix/pc"),
             settings=str(self.root),
             configuration=str(self.root / "Manager"),
-            priority=SimpleNamespace(has_section=lambda section: False),
+            priority=configparser.ConfigParser(),
             setPriority=Mock(),
             write_priority=Mock(),
         )
