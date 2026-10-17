@@ -7,7 +7,8 @@ from unittest.mock import Mock, patch
 
 from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
 
-from src.core.nexus import ModFiles, NexusFile
+from src.core.nexus import ModFiles, NexusError, NexusFile
+from src.core.smupdate import ScriptMergerUpdate, ScriptMergerUpdateFailed
 from src.core.scriptmerger import (
     LEFTOVER,
     MERGED,
@@ -21,12 +22,20 @@ from src.core.scriptmerger import (
     findScriptMerger,
     installedVersion,
     isNewer,
+    latestScriptMerger,
     nexusId,
     readInventory,
     xxh32,
 )
 from src.gui.main_widget import CustomMainWidget
-from src.gui.scriptmerger_dialog import MessageAlertScriptConflicts, ScriptConflictsDialog, summary
+from src.gui.scriptmerger_dialog import (
+    OPEN_PAGE,
+    UPDATE,
+    MessageAlertScriptConflicts,
+    ScriptConflictsDialog,
+    askScriptMergerUpdate,
+    summary,
+)
 
 
 class HashTests(unittest.TestCase):
@@ -345,7 +354,7 @@ class HandlerTests(unittest.TestCase):
     def test_script_merger_update_check(self):
         with (
             patch("src.gui.main_widget.installedVersion", return_value="1.4"),
-            patch("src.gui.main_widget.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes) as asked,
+            patch("src.gui.main_widget.askScriptMergerUpdate", return_value=OPEN_PAGE) as asked,
             patch("src.gui.main_widget.openUrl") as opened,
         ):
             CustomMainWidget.scriptMergerChecked(self.widget, "hidden")
@@ -357,7 +366,99 @@ class HandlerTests(unittest.TestCase):
                 self.widget, self.files(("1.4", "MAIN"), ("1.5", "MAIN"), ("9", "OPTIONAL"))
             )
             self.assertIn("Script Merger 1.5 is available, you have 1.4", self.outputs())
+            asked.assert_called_once_with(self.widget, "1.5", "1.4")
             opened.assert_called_once_with("https://www.nexusmods.com/witcher3/mods/13076?tab=files")
+            self.widget.updateScriptMerger.assert_not_called()
+
+            asked.return_value = UPDATE
+            files = self.files(("1.5", "MAIN"))
+            CustomMainWidget.scriptMergerChecked(self.widget, files)
+            self.widget.updateScriptMerger.assert_called_once_with(files.files[1])
+            asked.return_value = ""
+            CustomMainWidget.scriptMergerChecked(self.widget, files)
+            self.assertEqual(opened.call_count, 1)
+            self.assertEqual(self.widget.updateScriptMerger.call_count, 1)
+
+    def test_latest_leaves_out_source_code(self):
+        files = ModFiles(
+            {1: NexusFile(1, "Script Merger Remastered", "1.5", "MAIN", True, 10, "sm.zip", 1),
+             2: NexusFile(2, "Script Merger Remastered Source Code", "1.5", "MAIN", False, 20, "src.zip", 1),
+             3: NexusFile(3, "Script Merger Remastered", "1.4", "ARCHIVED", False, 30, "old.zip", 1)}
+        )  # fmt: skip
+        self.assertEqual(latestScriptMerger(files).fileId, 1)
+        self.assertIsNone(latestScriptMerger(ModFiles()))
+
+    def test_manual_check(self):
+        self.widget.nexusBusy.return_value = False
+        client = self.widget.nexusClient.return_value
+        with patch("src.gui.main_widget.installedVersion", return_value="1.4"):
+            CustomMainWidget.checkScriptMergerUpdate(self.widget)
+        work, done = self.widget.runNexus.call_args.args
+        self.assertIs(done, self.widget.scriptMergerChecked)
+        client.modFiles.return_value = "files"
+        self.assertEqual(work(Mock()), "files")
+        client.modFiles.assert_called_once_with(13076)
+        client.modFiles.side_effect = NexusError("gone", 404)
+        self.assertEqual(work(Mock()), "gone")
+        client.modFiles.side_effect = NexusError("bad key", 401)
+        with self.assertRaises(NexusError):
+            work(Mock())
+
+        self.widget.runNexus.reset_mock()
+        with patch("src.gui.main_widget.installedVersion", return_value=""):
+            CustomMainWidget.checkScriptMergerUpdate(self.widget)
+        self.widget.runNexus.assert_not_called()
+        self.assertIn("Couldn't read the version of C:/SM/WitcherScriptMerger.exe", self.outputs())
+
+    def test_update_downloads_then_installs(self):
+        self.widget.nexusBusy.return_value = False
+        self.config.backups = "C:/backups"
+        client = self.widget.nexusClient.return_value
+        client.downloadLinks.return_value = ["https://cdn/sm.zip"]
+        client.download.return_value = "C:/archives/sm.zip"
+        file = NexusFile(7, "Script Merger", "1.5.1", "MAIN", True, 1, "SM 13076 1.5.1.zip", 100)
+        CustomMainWidget.updateScriptMerger(self.widget, file)
+        work, _ = self.widget.runNexus.call_args.args
+        with patch("src.gui.main_widget.updateScriptMergerFiles", return_value="done") as update:
+            self.assertEqual(work(Mock()), ("C:/archives/sm.zip", "done"))
+        client.downloadLinks.assert_called_once_with(13076, 7)
+        self.assertEqual(client.download.call_args.args[:4], ("https://cdn/sm.zip", "C:/archives", "SM 13076 1.5.1.zip", 100))
+        update.assert_called_once_with("C:/SM/WitcherScriptMerger.exe", "C:/archives/sm.zip", "C:/backups")
+        with patch("src.gui.main_widget.updateScriptMergerFiles", side_effect=ScriptMergerUpdateFailed("open")):
+            self.assertEqual(work(Mock()), ("C:/archives/sm.zip", "open"))
+        client.downloadLinks.side_effect = NexusError("premium only", 403)
+        self.assertIsNone(work(Mock()))
+
+        self.widget.runNexus.reset_mock()
+        self.widget.scriptMergerRunning.return_value = True
+        CustomMainWidget.updateScriptMerger(self.widget, file)
+        self.widget.runNexus.assert_not_called()
+        self.assertIn("Close Script Merger before updating it.", self.outputs())
+
+    def test_update_results(self):
+        file = NexusFile(7, "Script Merger", "1.5.1", "MAIN", True, 1, "sm.zip", 100)
+        history = self.widget.downloadHistory
+        with patch("src.gui.main_widget.openUrl") as opened:
+            CustomMainWidget.scriptMergerUpdated(self.widget, file, None)
+        opened.assert_called_once_with("https://www.nexusmods.com/witcher3/mods/13076?tab=files&file_id=7")
+        history.add.assert_not_called()
+
+        with patch("src.gui.main_widget.QMessageBox.warning") as warned:
+            CustomMainWidget.scriptMergerUpdated(self.widget, file, ("C:/a/sm.zip", "Script Merger is open."))
+        warned.assert_called_once()
+        entry = history.add.call_args.args[0]
+        self.assertEqual((entry.result, entry.message, entry.archive), ("failed", "Script Merger is open.", "C:/a/sm.zip"))
+
+        done = ScriptMergerUpdate("1.5", "1.5.1", "C:/backups/~Script Merger/1.5 x", ["a.dll"])
+        CustomMainWidget.scriptMergerUpdated(self.widget, file, ("C:/a/sm.zip", done))
+        entry = history.add.call_args.args[0]
+        self.assertEqual((entry.result, entry.version, entry.mod), ("updated", "1.5.1", "Script Merger"))
+        self.assertIn("Script Merger updated 1.5 -> 1.5.1. The files it replaced are backed up in C:/backups/", self.outputs())
+        self.assertNotIn("still reports", self.outputs())
+        CustomMainWidget.scriptMergerUpdated(
+            self.widget, file, ("C:/a/sm.zip", ScriptMergerUpdate("1.5", "1.5", "C:/b", ["a.dll"]))
+        )
+        self.assertIn("Script Merger still reports version 1.5, expected 1.5.1.", self.outputs())
 
     def test_update_check_includes_script_merger_only_for_all_mods(self):
         mod = SimpleNamespace(name="A", nexus=SimpleNamespace(modId=5))

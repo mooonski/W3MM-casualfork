@@ -102,8 +102,11 @@ from src.core.scriptmerger import (
     findScriptMerger,
     installedVersion,
     isNewer,
+    latestScriptMerger,
     nexusId,
 )
+from src.core.smupdate import ScriptMergerUpdateFailed
+from src.core.smupdate import updateScriptMerger as updateScriptMergerFiles
 from src.core.updater import ModUpdater
 from src.domain.mod import Mod
 from src.globals import data
@@ -135,7 +138,9 @@ from src.gui.nexus_dialogs import (
 )
 from src.gui.requirements_dialog import RequirementsDialog
 from src.gui.saves_dialog import SaveBackupsDialog
-from src.gui.scriptmerger_dialog import MessageAlertScriptConflicts, ScriptConflictsDialog
+from src.gui.scriptmerger_dialog import OPEN_PAGE as SM_OPEN_PAGE
+from src.gui.scriptmerger_dialog import UPDATE as SM_UPDATE
+from src.gui.scriptmerger_dialog import MessageAlertScriptConflicts, ScriptConflictsDialog, askScriptMergerUpdate
 from src.gui.settings_dialog import KEYS_TAB, USER_TAB, GameSettingsDialog
 from src.gui.themes import get_dark_palette, get_light_palette, get_system_palette, statusColor
 from src.gui.tree_widget import (
@@ -550,6 +555,7 @@ class CustomMainWidget(QWidget):
         self.actionRestoreColumns.triggered.connect(self.restoreColumns)
         self.actionCheckUpdates.triggered.connect(lambda: self.checkForUpdates(showDialog=False))
         self.actionUpdateMods.triggered.connect(self.updateSelectedMods)
+        self.actionUpdateScriptMerger.triggered.connect(self.checkScriptMergerUpdate)
         self.actionSetNexusMod.triggered.connect(self.setNexusMod)
         self.actionChooseFile.triggered.connect(self.chooseInstalledFile)
         self.actionOpenNexusPage.triggered.connect(self.openNexusPage)
@@ -1710,17 +1716,49 @@ class CustomMainWidget(QWidget):
         )
         self.runNexus(work, lambda results: self.updatesChecked(checked, results, showDialog, onlyUpdates))
 
+    def checkScriptMergerUpdate(self) -> None:
+        '''Checks Nexus for a newer Script Merger on its own and offers to update it'''
+        if self.nexusBusy():
+            return
+        if not data.getConfig().scriptmerger and not self.detectScriptMerger():
+            self.output(
+                translate("MainWindow", "Script Merger wasn't found. Set its path in Settings > Configure Settings.")
+            )
+            return
+        if not installedVersion(data.getConfig().scriptmerger):
+            self.output(
+                translate("MainWindow", "Couldn't read the version of")
+                + f" {data.getConfig().scriptmerger}"
+            )
+            return
+        client = self.nexusClient()
+        if client is None:
+            return
+        modId = nexusId(data.getConfig().gameversion)
+
+        def work(progress):
+            try:
+                return client.modFiles(modId)
+            except NexusError as error:
+                if error.status in (401, 429):
+                    raise
+                return str(error)
+
+        self.output(translate("MainWindow", "Checking Script Merger on Nexus..."))
+        self.runNexus(work, self.scriptMergerChecked)
+
     def scriptMergerChecked(self, files: ModFiles | str) -> None:
-        '''Reports whether a newer Script Merger is on Nexus'''
+        '''Reports whether a newer Script Merger is on Nexus and offers to update it'''
         installed = installedVersion(data.getConfig().scriptmerger)
         if isinstance(files, str):
             self.output(translate("MainWindow", "Couldn't check Script Merger:") + f" {files}")
             return
-        current = files.currentFiles()
-        main = [file for file in current if file.category == "MAIN"] or current
-        if not main or not installed:
+        latest = latestScriptMerger(files)
+        if latest is None:
+            self.output(translate("MainWindow", "Nexus lists no Script Merger download."))
             return
-        latest = main[0]
+        if not installed:
+            return
         if not isNewer(latest.version, installed):
             self.output(translate("MainWindow", "Script Merger is up to date") + f" ({installed})")
             return
@@ -1731,19 +1769,77 @@ class CustomMainWidget(QWidget):
             + translate("MainWindow", "is available, you have")
             + f" {installed}: {url}"
         )
-        answer = QMessageBox.question(
-            self,
-            translate("MainWindow", "Script Merger update"),
-            translate("MainWindow", "Script Merger")
-            + f" {latest.version} "
-            + translate("MainWindow", "is available, you have")
-            + f" {installed}.\n\n"
-            + translate("MainWindow", "Open its Nexus page?"),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        if answer == QMessageBox.StandardButton.Yes:
+        answer = askScriptMergerUpdate(self, latest.version, installed)
+        if answer == SM_UPDATE:
+            self.updateScriptMerger(latest)
+        elif answer == SM_OPEN_PAGE:
             openUrl(url)
+
+    def updateScriptMerger(self, file: NexusFile) -> None:
+        '''Downloads file from Script Merger's Nexus page and installs it over the current Script Merger'''
+        if self.nexusBusy():
+            return
+        if self.scriptMergerRunning():
+            self.output(translate("MainWindow", "Close Script Merger before updating it."))
+            return
+        client = self.nexusClient()
+        if client is None:
+            return
+        config = data.getConfig()
+        executable, archives, backups = config.scriptmerger, config.archives, config.backups
+        modId = nexusId(config.gameversion)
+
+        def work(progress):
+            try:
+                url = client.downloadLinks(modId, file.fileId)[0]
+            except NexusError as error:
+                if error.status == 403:
+                    # without Premium, Nexus only gives download links through its website
+                    return None
+                raise
+            archive = client.download(url, archives, file.fileName or f"{modId}-{file.fileId}.zip", file.size,
+                                      progress=progress)  # fmt: skip
+            try:
+                return archive, updateScriptMergerFiles(executable, archive, backups)
+            except ScriptMergerUpdateFailed as error:
+                return archive, str(error)
+
+        self.output(translate("MainWindow", "Downloading Script Merger") + f" {file.version}...")
+        self.runNexus(work, lambda result: self.scriptMergerUpdated(file, result))
+
+    def scriptMergerUpdated(self, file: NexusFile, result) -> None:
+        modId = nexusId(data.getConfig().gameversion)
+        if result is None:
+            url = f"https://www.nexusmods.com/{GAME_DOMAIN}/mods/{modId}?tab=files&file_id={file.fileId}"
+            self.output(
+                translate("MainWindow", "Nexus only allows this download from its website:") + f" {url}"
+            )
+            openUrl(url)
+            return
+        archive, outcome = result
+        entry = Download(0, modId, file.fileId, "Script Merger", file.version, archive, UPDATE, UPDATED,
+                         mod="Script Merger")  # fmt: skip
+        if isinstance(outcome, str):
+            entry.result, entry.message = DOWNLOAD_FAILED, outcome
+            self.downloadHistory.add(entry)
+            self.output(outcome)
+            QMessageBox.warning(self, translate("MainWindow", "Script Merger update failed"), outcome)
+            return
+        self.downloadHistory.add(entry)
+        message = (
+            translate("MainWindow", "Script Merger updated")
+            + f" {outcome.previous or '?'} -> {outcome.version or '?'}."
+        )
+        if outcome.replaced:
+            message += " " + translate("MainWindow", "The files it replaced are backed up in") + f" {outcome.backup}"
+        self.output(message)
+        if outcome.version and isNewer(file.version, outcome.version):
+            self.output(
+                translate("MainWindow", "Script Merger still reports version")
+                + f" {outcome.version}, "
+                + translate("MainWindow", "expected")
+                + f" {file.version}."
+            )
 
     def updatesChecked(
         self, names: list[str], results: dict, showDialog: bool = True, onlyUpdates: bool = False
@@ -3705,6 +3801,9 @@ class CustomMainWidget(QWidget):
         self.actionUpdateMods = QAction(self.mainWindow)
         self.actionUpdateMods.setObjectName("actionUpdateMods")
 
+        self.actionUpdateScriptMerger = QAction(self.mainWindow)
+        self.actionUpdateScriptMerger.setObjectName("actionUpdateScriptMerger")
+
         self.actionSetNexusMod = QAction(self.mainWindow)
         self.actionSetNexusMod.setObjectName("actionSetNexusMod")
 
@@ -3870,6 +3969,7 @@ class CustomMainWidget(QWidget):
         # --- Build Nexus menu ---
         self.menuNexus.addAction(self.actionCheckUpdates)
         self.menuNexus.addAction(self.actionUpdateMods)
+        self.menuNexus.addAction(self.actionUpdateScriptMerger)
         self.menuNexus.addSeparator()
         self.menuNexus.addAction(self.actionSetNexusMod)
         self.menuNexus.addAction(self.actionChooseFile)
@@ -4052,6 +4152,10 @@ class CustomMainWidget(QWidget):
             translate("MainWindow", "Update the selected mods, or every mod with an update if none are selected")
         )
         self.actionUpdateMods.setShortcut("Ctrl+F7")
+        self.actionUpdateScriptMerger.setText(translate("MainWindow", "Update Script Merger..."))
+        self.actionUpdateScriptMerger.setToolTip(
+            translate("MainWindow", "Check Nexus for a newer Script Merger and install it over the current one")
+        )
         self.actionSetNexusMod.setText(translate("MainWindow", "Set Nexus Mod..."))
         self.actionChooseFile.setText(translate("MainWindow", "Choose Nexus File..."))
         self.actionChooseFile.setToolTip(

@@ -65,6 +65,37 @@ def MessageAlertScriptConflicts(pending: list[ScriptConflict], scriptMergerFound
     )
 
 
+UPDATE = "update"
+OPEN_PAGE = "page"
+
+
+def askScriptMergerUpdate(parent: QWidget | None, available: str, installed: str) -> str:
+    '''Asks what to do about a newer Script Merger. Returns UPDATE, OPEN_PAGE or "".'''
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Question)
+    box.setWindowTitle(translate("ScriptMerger", "Script Merger update"))
+    box.setText(
+        translate("ScriptMerger", "Script Merger")
+        + f" {available} "
+        + translate("ScriptMerger", "is available, you have")
+        + f" {installed}."
+    )
+    box.setInformativeText(
+        translate(
+            "ScriptMerger",
+            "Update downloads it from Nexus and installs it over the current one. Your Script Merger settings and "
+            "merge inventory are kept, and the files it replaces are backed up first.",
+        )
+    )
+    update = box.addButton(translate("ScriptMerger", "Update"), QMessageBox.ButtonRole.AcceptRole)
+    page = box.addButton(translate("ScriptMerger", "Open Nexus Page"), QMessageBox.ButtonRole.ActionRole)
+    box.addButton(translate("ScriptMerger", "Not Now"), QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(update)
+    box.exec()
+    clicked = box.clickedButton()
+    return UPDATE if clicked is update else OPEN_PAGE if clicked is page else ""
+
+
 class ScriptConflictsDialog(QDialog):
     '''Lists scripts changed by more than one mod and whether Script Merger has merged them'''
 

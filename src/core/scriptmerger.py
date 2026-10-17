@@ -276,6 +276,13 @@ def nexusId(gameversion: str) -> int:
     return NEXUS_IDS.get(gameversion, CLASSIC_NEXUS_ID)
 
 
+def latestScriptMerger(files):
+    '''The newest main download on Script Merger's Nexus page, leaving out its source code. None if there's none.'''
+    current = [file for file in files.currentFiles() if "source code" not in file.name.casefold()]
+    main = [file for file in current if file.category == "MAIN"] or current
+    return max(main, key=lambda file: file.uploaded) if main else None
+
+
 def versionKey(version: str) -> tuple[int, ...]:
     return tuple(int(part) for part in re.findall(r"\d+", version))
 
