@@ -12,6 +12,7 @@ from src.core.model import Model
 from src.core.nexusdetails import ModDetails
 from src.core.requirements import EXTERNAL, missingRequirements
 from src.core.scriptmerger import MERGED_FOLDER, ConflictReport
+from src.core.sharedutils import FIXED_PRIORITY, SharedutilsCheck, checkSharedutils, fixedPriorities
 from src.domain.mod import Mod
 
 ERROR = "error"
@@ -21,12 +22,21 @@ SEVERITY_ORDER = {ERROR: 0, WARNING: 1, INFO: 2}
 
 
 @dataclass
+class Fix:
+    '''A change that solves an issue, described before it's made'''
+
+    summary: str
+    apply: Callable[[], None]
+
+
+@dataclass
 class Issue:
     severity: str
     mod: str
     problem: str
     detail: str = ''
     url: str = ''
+    fix: Fix | None = None
 
 
 def checkHealth(
@@ -131,6 +141,9 @@ def checkHealth(
                     )
                 )
 
+    if mods and path.isdir(mods):
+        issues += sharedutilsIssues(model, config)
+
     if scripts is not None:
         pending = scripts.pending
         if pending:
@@ -143,6 +156,104 @@ def checkHealth(
                 )
             )
     return sorted(issues, key=lambda issue: (SEVERITY_ORDER[issue.severity], issue.mod.lower(), issue.problem))
+
+
+def sharedutilsIssues(model: Model, config, involving: set[str] | None = None) -> list[Issue]:
+    '''Mods built on Sharedutils that Remastered can't compile: Sharedutils is missing, or they load after it.
+    With involving (mod names), only the issues about those mods, or all of them when Sharedutils is one.'''
+    mods = config.mods or ''
+    if not mods or not path.isdir(mods):
+        return []
+    priority = getattr(config, "getPriority", None) or _priorityReader(config)
+    check = checkSharedutils(mods, priority)
+    names = {}
+    for mod in model.all():
+        for folder in mod.files:
+            names.setdefault(folder.casefold(), mod.name)
+
+    def name(folder: str) -> str:
+        return names.get(folder.casefold(), folder)
+
+    issues = []
+    if not check.sharedutils:
+        for folder, uses in check.dependents.items():
+            issues.append(
+                Issue(
+                    WARNING,
+                    name(folder),
+                    "Needs Sharedutils",
+                    f"Mods/{folder} uses {_names(uses)} from Sharedutils, which isn't installed or is disabled, "
+                    "so the game's scripts won't compile",
+                )
+            )
+    elif check.late and getattr(config, "gameversion", "") == "re":
+        changes = fixedPriorities(check)
+        fix = Fix(_fixSummary(check, changes), lambda: _applyPriorities(config, changes)) if changes else None
+        sharedutils = check.sharedutils
+        own = check.priorities.get(sharedutils)
+        for folder in check.late:
+            number = check.priorities.get(folder)
+            if number is None:
+                has = "it has none, so it loads after every numbered mod"
+            elif number == own:
+                has = f"it has the same number, {number}, and comes after it by name"
+            else:
+                has = f"it has {number}"
+            issues.append(
+                Issue(
+                    WARNING,
+                    name(folder),
+                    "Loads after Sharedutils",
+                    f"Remastered compiles scripts in load order and Mods/{folder} builds on Sharedutils "
+                    f"({_names(check.dependents[folder])}), so it needs a lower priority number than {sharedutils} "
+                    f"({_numberText(own)}); {has}. Give Sharedutils the highest number (e.g. {FIXED_PRIORITY}) "
+                    "and this mod a lower one (Fix does that)",
+                    fix=fix,
+                )
+            )
+    if involving is not None:
+        if not check.sharedutils or name(check.sharedutils) not in involving:
+            issues = [issue for issue in issues if issue.mod in involving]
+    return issues
+
+
+def _priorityReader(config) -> Callable[[str], str | None]:
+    parser = getattr(config, "priority", None)
+
+    def read(section: str) -> str | None:
+        if parser is not None and parser.has_section(section) and parser.has_option(section, "priority"):
+            return parser.get(section, "priority")
+        return None
+
+    return read
+
+
+def _names(uses: list[str]) -> str:
+    shown = ", ".join(uses[:3])
+    return shown + (f" and {len(uses) - 3} more" if len(uses) > 3 else "")
+
+
+def _numberText(number: int | None) -> str:
+    return "no priority" if number is None else f"priority {number}"
+
+
+def _fixSummary(check: SharedutilsCheck, changes: dict[str, int]) -> str:
+    lines = [
+        f"  {folder}: {_numberText(check.priorities.get(folder))} → {number}"
+        for folder, number in sorted(changes.items(), key=lambda item: (item[1], item[0].casefold()))
+    ]
+    return "Sets these priorities in mods.settings, so the mods built on Sharedutils load before it:\n" + "\n".join(
+        lines
+    )
+
+
+def _applyPriorities(config, changes: dict[str, int]) -> None:
+    for folder, number in changes.items():
+        config.setPriority(folder, str(number))
+    # the write is debounced onto a timer; wait for it so mods.settings is written when this returns
+    writing = config.write_priority()
+    if hasattr(writing, "join"):
+        writing.join()
 
 
 def _folderIssues(mod: Mod, mods: str, name: str) -> list[Issue]:

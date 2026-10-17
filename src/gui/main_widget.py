@@ -66,7 +66,7 @@ from src.core.groups import (
     renameGroup,
     uniqueName,
 )
-from src.core.health import ERROR, INFO, WARNING, Issue, checkHealth
+from src.core.health import ERROR, INFO, WARNING, Issue, checkHealth, sharedutilsIssues
 from src.core.history import FAILED as DOWNLOAD_FAILED
 from src.core.history import INSTALLED, KEPT, LINK, REINSTALL, UPDATE, UPDATED, WEBSITE, Download, DownloadHistory
 from src.core.installer import Installer
@@ -298,6 +298,10 @@ class CustomMainWidget(QWidget):
     def reloadPriorities(self):
         '''Reads mods.settings again and shows its priorities in the mod list as well as the load order'''
         data.getConfig().readPriority()
+        self.showPriorities()
+
+    def showPriorities(self):
+        '''Shows the priorities set in mods.settings (as last read or set here) in the mod list and load order'''
         for mod in self.model.all():
             mod.syncPriority()
         self.refreshList()
@@ -1115,6 +1119,7 @@ class CustomMainWidget(QWidget):
             if file:
                 progress = 0
                 progressMax = len(file)
+                before = self.modVersions()
                 installer = Installer(self.model, output=self.output, duplicate=self.handleDuplicate)
                 for mod in file:
                     waiting = unfinishedDownload(mod)
@@ -1147,6 +1152,7 @@ class CustomMainWidget(QWidget):
                 if successCount:
                     self.alertRunScriptMerger()
                     self.checkRequirementsAfterInstall(file)
+                    self.checkSharedutilsAfterInstall(before)
                 self.setProgress(0)
             else:
                 self.output(translate("MainWindow", "Installation canceled"))
@@ -1339,6 +1345,7 @@ class CustomMainWidget(QWidget):
         if not jobs:
             return
         updater = ModUpdater(self.model, output=self.output)
+        before = self.modVersions()
         done = failed = incomplete = 0
         for index, (name, archive) in enumerate(jobs):
             mod = self.model.modList.get(name)
@@ -1376,6 +1383,7 @@ class CustomMainWidget(QWidget):
             MessageAlertIncompleteInstallation()
         if done:
             self.alertRunScriptMerger()
+            self.checkSharedutilsAfterInstall(before)
 
     def reinstallMods(self):
         '''Reinstalls selected mods'''
@@ -2024,6 +2032,7 @@ class CustomMainWidget(QWidget):
             )
             return
         updater = ModUpdater(self.model, output=self.output)
+        before = self.modVersions()
         for index, (name, modId, file, archive, error, status) in enumerate(results):
             mod = self.model.modList.get(name)
             record = self.downloadHistory.add(
@@ -2073,6 +2082,7 @@ class CustomMainWidget(QWidget):
             MessageAlertIncompleteInstallation()
         if updated:
             self.alertRunScriptMerger()
+            self.checkSharedutilsAfterInstall(before)
 
     def setNexusMod(self) -> None:
         '''Links the selected mods to their Nexus mod pages'''
@@ -3644,7 +3654,35 @@ class CustomMainWidget(QWidget):
             return []
 
     def showHealthCheck(self) -> None:
-        HealthDialog(self, self.healthIssues(), self.healthIssues).exec()
+        HealthDialog(self, self.healthIssues(), self.healthIssues, fixed=self.showPriorities).exec()
+
+    def modVersions(self) -> dict[str, tuple[int, str]]:
+        '''Which entry and install time each mod has, to tell afterwards which ones were installed'''
+        return {mod.name: (id(mod), mod.date) for mod in self.model.all()}
+
+    def checkSharedutilsAfterInstall(self, before: dict[str, tuple[int, str]]) -> None:
+        '''After installing or updating mods, warns if Remastered can't compile the ones built on Sharedutils'''
+        installed = {name for name, version in self.modVersions().items() if before.get(name) != version}
+        if not installed:
+            return
+        try:
+            issues = sharedutilsIssues(self.model, data.getConfig(), installed)
+        except OSError as err:
+            self.output(translate("MainWindow", "Couldn't check the mods built on Sharedutils:") + f" {err}")
+            return
+        if not issues:
+            return
+        self.output("> " + translate("MainWindow", "Scripts may not compile (Mods > Health Check...):"))
+        for issue in issues:
+            self.output(f"  {issue.mod}: {issue.problem}")
+        self.raiseWindow()
+        HealthDialog(
+            self,
+            issues,
+            lambda: sharedutilsIssues(self.model, data.getConfig()),
+            translate("MainWindow", "Sharedutils Load Order"),
+            fixed=self.showPriorities,
+        ).exec()
 
     def reportHealth(self) -> None:
         '''Mentions problems at startup, without opening anything'''

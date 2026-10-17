@@ -232,6 +232,7 @@ class PrioritySyncTests(unittest.TestCase):
         widget = Mock()
         mods = [Mod(files=["modA"], _priority="2"), Mod(files=["modC"], _priority="7")]
         widget.model.all.return_value = mods
+        widget.showPriorities = lambda: CustomMainWidget.showPriorities(widget)
         CustomMainWidget.reloadPriorities(widget)
         self.config.readPriority.assert_called_once()
         self.assertEqual([mod.priority for mod in mods], ["5", "-"])

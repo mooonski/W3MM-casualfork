@@ -148,7 +148,9 @@ class HealthGuiTests(unittest.TestCase):
 
         with patch("src.gui.main_widget.HealthDialog") as dialog:
             CustomMainWidget.showHealthCheck(widget)
-        dialog.assert_called_once_with(widget, widget.healthIssues.return_value, widget.healthIssues)
+        dialog.assert_called_once_with(
+            widget, widget.healthIssues.return_value, widget.healthIssues, fixed=widget.showPriorities
+        )
 
 
 if __name__ == "__main__":
