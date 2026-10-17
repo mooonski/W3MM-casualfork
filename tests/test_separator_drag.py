@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QTreeWidgetItem
 
 from src.core.groups import arrange, listKey
@@ -172,6 +173,28 @@ class ModTreeTests(unittest.TestCase):
         self.assertTrue(self.headings["Visuals"].flags() & Qt.ItemFlag.ItemIsDragEnabled)
         self.assertFalse(self.headings[""].flags() & Qt.ItemFlag.ItemIsDragEnabled)
         self.assertTrue(self.headings[""].flags() & Qt.ItemFlag.ItemIsDropEnabled)
+
+    def test_copy_gives_the_selected_names_in_list_order(self):
+        self.select(self.rows["Boat"], self.rows["Fog"], self.rows["Clouds"])
+        self.assertEqual(self.tree.copiedText(), "Clouds\nFog\nBoat")
+        # a separator stands for its mods, also when it is folded (Ctrl+A skips hidden rows)
+        self.headings["Visuals"].setExpanded(False)
+        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.tree.selectAll()
+        self.assertFalse(self.rows["Rain"].isSelected())
+        self.assertEqual(self.tree.copiedText(), "Clouds\nRain\nFog\nBlood\nBoat")
+        self.tree.clearSelection()
+        self.assertEqual(self.tree.copiedText(), "")
+
+    def test_ctrl_c_puts_the_names_on_the_clipboard(self):
+        clipboard = Mock()  # never the real one
+        with patch("src.gui.tree_widget.QApplication.clipboard", return_value=clipboard):
+            self.tree.clearSelection()
+            QTest.keyClick(self.tree, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+            clipboard.setText.assert_not_called()  # nothing selected leaves the clipboard alone
+            self.select(self.rows["Blood"], self.rows["Rain"])
+            QTest.keyClick(self.tree, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+        clipboard.setText.assert_called_once_with("Rain\nBlood")
 
 
 class HandlerTests(unittest.TestCase):

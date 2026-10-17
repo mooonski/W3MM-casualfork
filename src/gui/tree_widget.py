@@ -3,7 +3,7 @@
 import sys
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QBrush, QPalette
+from PySide6.QtGui import QBrush, QKeySequence, QPalette
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QTreeWidget, QTreeWidgetItem, QWidget
 
 # holds the group name on a group heading in the mod list
@@ -84,7 +84,7 @@ class ModTree(QTreeWidget):
     """The mod list. Selected mods can be dragged to a new place: between two mods to put them there, or onto a
     separator to put them at its end; a separator dragged onto another one takes its place. Only the list's own
     order changes, never the game's load order. The owner does the moving and fills the list again; files dragged
-    in from outside are left to the window, which installs them."""
+    in from outside are left to the window, which installs them. Ctrl+C copies the selected mods' names."""
 
     modsMoved = Signal(list, str, int)  # mod names, separator ("" = none), place among its other mods (-1: end)
     separatorsMoved = Signal(list, int)  # dragged separators, place among the other separators (-1: last)
@@ -96,6 +96,28 @@ class ModTree(QTreeWidget):
         self.setDragDropOverwriteMode(False)  # drops can land between rows
         self.setDropIndicatorShown(True)
         self.setDragEnabled(True)
+
+    def copiedText(self) -> str:
+        """The names of the selected mods as the list shows them, one per line (mod.io's too). A selected separator
+        stands for all its mods, so Ctrl+A (which skips the rows of a folded one) still copies every mod."""
+        names = []
+        for index in range(self.topLevelItemCount()):
+            item = self.topLevelItem(index)
+            if isGroupItem(item):
+                children = [item.child(child) for child in range(item.childCount())]
+                names += [row.text(1) for row in children if item.isSelected() or row.isSelected()]
+            elif item.isSelected():
+                names.append(item.text(1))
+        return "\n".join(names)
+
+    def keyPressEvent(self, event) -> None:
+        if event.matches(QKeySequence.StandardKey.Copy):
+            text = self.copiedText()
+            if text:
+                QApplication.clipboard().setText(text)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def dropEvent(self, event) -> None:
         if event.source() is not self:

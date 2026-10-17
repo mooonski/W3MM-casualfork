@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QTreeWidgetItem
 
 from src.core.conflicts import loadOrder
@@ -114,6 +115,28 @@ class LoadOrderTreeTests(unittest.TestCase):
         other.source.return_value = None
         tree.dropEvent(other)
         other.ignore.assert_called_once()
+
+    def test_select_all_and_copy(self):
+        tree = self.tree(MERGED, "modA", "modB", "~modOff")
+        tree.selectAll()
+        self.assertEqual(tree.copiedText(), "\n".join([MERGED, "modA", "modB", "~modOff"]))
+        clipboard = Mock()  # never the real one
+        tree.clearSelection()
+        tree.topLevelItem(2).setSelected(True)
+        tree.topLevelItem(1).setSelected(True)
+        with unittest.mock.patch("src.gui.load_order_tree.QApplication.clipboard", return_value=clipboard):
+            QTest.keyClick(tree, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+        clipboard.setText.assert_called_once_with("modA\nmodB")
+
+    def test_ctrl_a_follows_the_focus(self):
+        widget = Mock()
+        widget.loadOrder.hasFocus.return_value = True
+        CustomMainWidget.selectAllMods(widget)
+        widget.loadOrder.selectAll.assert_called_once()
+        widget.treeWidget.selectAll.assert_not_called()
+        widget.loadOrder.hasFocus.return_value = False
+        CustomMainWidget.selectAllMods(widget)
+        widget.treeWidget.selectAll.assert_called_once()
 
     def test_handler_writes_priorities_and_updates_the_mod_list(self):
         widget = Mock()

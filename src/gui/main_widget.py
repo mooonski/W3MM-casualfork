@@ -1541,8 +1541,11 @@ class CustomMainWidget(QWidget):
             )
 
     def selectAllMods(self):
-        '''Selects all mods in the list'''
-        self.treeWidget.selectAll()
+        '''Selects all mods in the list, or in the load order when that has the focus'''
+        if self.loadOrder.hasFocus():
+            self.loadOrder.selectAll()
+        else:
+            self.treeWidget.selectAll()
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         '''Space in the mod list ticks or unticks all selected mods'''
