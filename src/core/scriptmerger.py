@@ -66,6 +66,15 @@ def fileHash(filename: str) -> str:
         return f"{xxh32(file.read()):08X}"
 
 
+def hashKey(value: str) -> str:
+    '''A hash from the inventory in fileHash's format; Script Merger drops leading zeros (D7CEB76 for 0D7CEB76)'''
+    value = value.strip()
+    try:
+        return f"{int(value, 16):08X}" if value else ''
+    except ValueError:
+        return value.upper()
+
+
 @dataclass
 class Merge:
     '''One merged file in Script Merger's inventory'''
@@ -115,7 +124,7 @@ def readInventory(folder: str) -> list[Merge] | None:
         if not relative:
             continue
         included = {
-            (mod.text or '').strip(): (mod.get("Hash") or '').upper()
+            (mod.text or '').strip(): hashKey(mod.get("Hash") or '')
             for mod in element.findall("IncludedMod")
             if (mod.text or '').strip()
         }

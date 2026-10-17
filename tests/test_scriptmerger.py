@@ -138,6 +138,17 @@ class AnalyseTests(unittest.TestCase):
         self.assertEqual(merged.mods, ["modA", "modB"])
         self.assertEqual(len(report.pending), 6)
 
+    def test_hashes_without_leading_zeros_still_match(self):
+        a = self.script("modA", "game/merged.ws", "// modA 30")
+        b = self.script("modB", "game/merged.ws")
+        self.script("mod0000_MergedFiles", "game/merged.ws")
+        self.assertEqual(a, "0155A7C3")
+        # Script Merger writes the hash as a plain hex number
+        self.write(("game\\merged.ws", {"modA": "155a7c3", "modB": b}))
+        report = analyse(str(self.mods), str(self.merger))
+        self.assertEqual(self.states(report), {"game/merged.ws": (MERGED, "merged")})
+        self.assertEqual(readInventory(str(self.merger))[0].included["modA"], "0155A7C3")
+
     def test_without_script_merger_everything_is_unmerged(self):
         self.script("modA", "game/a.ws")
         self.script("modB", "game/a.ws")
