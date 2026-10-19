@@ -11,6 +11,9 @@ from src.core.duplicates import duplicateEntries
 from src.core.model import Model
 from src.core.nexusdetails import ModDetails
 from src.core.requirements import EXTERNAL, missingRequirements
+from src.core.reshade import ADDON_BUILD, BIN_FOLDERS, ReShadeInstall, addonFiles, findReShade
+from src.core.reshade import DISABLED as RESHADE_DISABLED
+from src.core.reshade import HOME_PAGE as RESHADE_HOME
 from src.core.scriptmerger import MERGED_FOLDER, ConflictReport
 from src.core.sharedutils import FIXED_PRIORITY, SharedutilsCheck, checkSharedutils, fixedPriorities
 from src.domain.mod import Mod
@@ -144,6 +147,10 @@ def checkHealth(
     if mods and path.isdir(mods):
         issues += sharedutilsIssues(model, config)
 
+    game = getattr(config, "game", "") or ""
+    if isinstance(game, str) and game:
+        issues += reshadeIssues(game)
+
     if scripts is not None:
         pending = scripts.pending
         if pending:
@@ -214,6 +221,59 @@ def sharedutilsIssues(model: Model, config, involving: set[str] | None = None) -
     if involving is not None:
         if not check.sharedutils or name(check.sharedutils) not in involving:
             issues = [issue for issue in issues if issue.mod in involving]
+    return issues
+
+
+def reshadeIssues(game: str, find: Callable[[str], list[ReShadeInstall]] = findReShade) -> list[Issue]:
+    '''ReShade add-ons that can't load: ReShade is missing, disabled, or the build that refuses them'''
+    issues = []
+    installs = {install.binFolder: install for install in find(game)}
+    for binFolder in BIN_FOLDERS:
+        install = installs.get(binFolder)
+        addons = install.addons if install else addonFiles(path.join(game, "bin", binFolder))
+        where = f"bin/{binFolder}"
+        if install is not None and install.duplicate:
+            issues.append(
+                Issue(
+                    WARNING,
+                    "ReShade",
+                    "ReShade is there twice",
+                    f"Both {where}/{install.name} and {install.name}{RESHADE_DISABLED} exist; one is left over",
+                )
+            )
+        if not addons:
+            continue
+        names = _names(addons)
+        if install is None:
+            issues.append(
+                Issue(
+                    WARNING,
+                    "ReShade",
+                    "ReShade add-ons can't load",
+                    f"{where} has {names}, which need ReShade with add-on support; it isn't installed there",
+                    RESHADE_HOME,
+                )
+            )
+        elif not install.enabled:
+            issues.append(
+                Issue(
+                    INFO,
+                    "ReShade",
+                    "ReShade is disabled",
+                    f"{names} in {where} won't load until it's enabled again (Mods > ReShade...)",
+                )
+            )
+        elif install.build != ADDON_BUILD:
+            issues.append(
+                Issue(
+                    WARNING,
+                    "ReShade",
+                    "ReShade can't load these add-ons",
+                    f"The standard build of ReShade in {where} only loads a few approved add-ons, so {names} "
+                    "may not load. Install the build \"with full add-on support\" from reshade.me",
+                    RESHADE_HOME,
+                )
+            )
     return issues
 
 

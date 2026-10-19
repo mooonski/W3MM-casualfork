@@ -139,6 +139,7 @@ from src.gui.nexus_dialogs import (
 from src.gui.requirements_dialog import RequirementsDialog
 from src.gui.saves_dialog import SaveBackupsDialog
 from src.gui.scriptmerger_dialog import OPEN_PAGE as SM_OPEN_PAGE
+from src.gui.reshade_dialog import ReShadeDialog
 from src.gui.scriptmerger_dialog import UPDATE as SM_UPDATE
 from src.gui.scriptmerger_dialog import MessageAlertScriptConflicts, ScriptConflictsDialog, askScriptMergerUpdate
 from src.gui.settings_dialog import KEYS_TAB, USER_TAB, GameSettingsDialog
@@ -535,6 +536,7 @@ class CustomMainWidget(QWidget):
         self.actionFileConflicts.triggered.connect(self.showFileConflicts)
         self.actionHealthCheck.triggered.connect(self.showHealthCheck)
         self.actionGameSettings.triggered.connect(lambda: self.showGameSettings(USER_TAB))
+        self.actionReShade.triggered.connect(self.showReShade)
         self.actionSelect_All_Mods.triggered.connect(self.selectAllMods)
         self.actionEnableAll.triggered.connect(lambda: self.setVisibleModsEnabled(True))
         self.actionDisableAll.triggered.connect(lambda: self.setVisibleModsEnabled(False))
@@ -2408,6 +2410,13 @@ class CustomMainWidget(QWidget):
             self.output,
         ).exec()
 
+    def showReShade(self) -> None:
+        config = data.getConfig()
+        if not config.game:
+            self.output(translate("MainWindow", "Set the game path first (Settings > Change Setting)."))
+            return
+        ReShadeDialog(self, config.game, config.backups, self.output).exec()
+
     def showLoadOrderPanel(self) -> None:
         """mods.settings holds what the load order panel shows, so the button goes there"""
         self.loadOrder.setFocus()
@@ -3762,6 +3771,9 @@ class CustomMainWidget(QWidget):
         self.actionGameSettings = QAction(self.mainWindow)
         self.actionGameSettings.setObjectName("actionGameSettings")
 
+        self.actionReShade = QAction(self.mainWindow)
+        self.actionReShade.setObjectName("actionReShade")
+
         self.actionHealthCheck = QAction(self.mainWindow)
         self.actionHealthCheck.setObjectName("actionHealthCheck")
 
@@ -3993,6 +4005,7 @@ class CustomMainWidget(QWidget):
         self.menuFile.addAction(self.actionFileConflicts)
         self.menuFile.addAction(self.actionHealthCheck)
         self.menuFile.addAction(self.actionGameSettings)
+        self.menuFile.addAction(self.actionReShade)
         self.menuFile.addAction(self.actionSelect_All_Mods)
 
         # --- Build Edit menu ---
@@ -4136,6 +4149,10 @@ class CustomMainWidget(QWidget):
         self.actionGameSettings.setText(translate("MainWindow", "Game Settings..."))
         self.actionGameSettings.setToolTip(
             translate("MainWindow", "The game's settings and key bindings, with what your mods added")
+        )
+        self.actionReShade.setText(translate("MainWindow", "ReShade..."))
+        self.actionReShade.setToolTip(
+            translate("MainWindow", "Whether ReShade is installed, turn it off and on, and update it from reshade.me")
         )
         self.actionHealthCheck.setIconText(translate("MainWindow", "Health Check"))
         self.actionHealthCheck.setToolTip(translate("MainWindow", "Look for problems with the installed mods"))
