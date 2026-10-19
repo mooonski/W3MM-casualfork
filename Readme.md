@@ -6,6 +6,68 @@ Supports the Steam and GOG releases on Windows, Steam Proton installations on Li
 
 Works with Original, Next-Gen, and Remastered installations.
 
+## About This Fork
+
+This is a personal fork ("casual fork") of [Systemcluster's The Witcher 3 Mod Manager](https://github.com/Systemcluster/The-Witcher-3-Mod-manager), built on version 0.10.5 and developed on the `nexus-updates` branch. It adds Nexus Mods updates and downloads, plus tools that were previously spread over several other programs. The rest of this readme describes the upstream manager, which all of this builds on.
+
+The Nexus features need a Nexus Mods API key, set with **Nexus > Set API Key...**. The key is stored encrypted with Windows DPAPI. Direct downloads need a Premium account; for other accounts, the download page opens in the browser. The fork runs from source on Python 3.13 as well.
+
+### Nexus Mods
+
+- **Check for Updates** marks every mod with a Nexus ID that has a newer file, and **Update** installs it in place of the old version. The update keeps the mod's priority, enabled state and separator, backs up the old version first, and records the exact Nexus file installed. **Restore Previous Version...** brings a backup back.
+- Updates follow the file update chain on Nexus, and the updates dialog shows each mod's changelog.
+- **Set Nexus Mod...** links a mod to its Nexus page by ID or URL. **Choose Nexus File...** records which file of the page is installed, or switches to another file.
+- Nexus details: thumbnails, categories, summaries and last-updated dates for linked mods.
+- **Browse Nexus** tab to search Witcher 3 mods, pick a file and **Download & Install** it.
+- **Check Requirements...** lists mods, expansions and tools that your mods' Nexus pages say they need, and the check also runs after installing.
+- **Check Remastered Versions...** finds mods not updated since Remastered, and other versions on Nexus that were.
+- Endorse mods from a thumbs-up column in the mod list.
+- **Download History...** lists everything downloaded from Nexus, what became of it, and lets you install it again.
+- Optional `nxm://` link handler ("Mod Manager Download" on Nexus). Links for other games are passed on to the previously registered program, and **Make W3MM the Default for Nexus Links** takes them back if another manager claims them.
+
+### Installing and Archives
+
+- Downloaded archives go to a configurable download folder, and copies of installed archives can be kept there.
+- Warns when a mod is installed twice under different names, or reinstalled over itself.
+- **Reinstall** a mod from its archive.
+- **Not Installed** tab for downloaded archives that nothing was installed from. Empty archives from unfinished browser downloads are explained.
+- **Clean Up Archives...** finds old versions and other archives you may not need, and sends them to the Recycle Bin or an "Old archives" folder.
+- Installs files for the game's `bin` folder, such as ReShade add-ons, and tracks them so uninstalling removes them. Files the manager didn't install are never overwritten.
+- **Import from RMMR...** brings installed mods and their Nexus IDs over from Relapse's Mod Manager Redux, including mods that only change ini settings.
+
+### Mod List and Load Order
+
+- Tick several mods and toggle them with Space, plus **Enable All** and **Disable All**.
+- Separators: named headings to group mods. Add them from the blank space below the list, drag mods onto them, drag separators to reorder them, and collapse or expand them all at once.
+- Drag mods into your own display order in the mod list. This is cosmetic only, and clicking a column header returns to column sorting.
+- Drag mods in the load order list to change their priorities.
+- Priorities always follow `mods.settings`, including edits made outside the manager. **Refresh** (F5) reads it and the mods again.
+- Mods the game installed from mod.io are shown in blue with a `[MOD.IO]` tag (display only).
+- Ctrl+C copies the names of the selected mods from the mod list or load order.
+
+### Script Merger
+
+- Toolbar button to run Script Merger (Ctrl+S). The manager watches it and reports any remaining script conflicts when it closes.
+- Script conflict warnings, with a prompt to run Script Merger after installing or updating mods.
+- Finds Script Merger automatically and reads its merge inventory.
+- **Update Script Merger...** installs a newer Script Merger from Nexus. Merges and Script Merger's own settings are kept, and replaced files are backed up first.
+
+### Health and Safety
+
+- **Health Check** looks for problems with installed mods: missing mod, DLC, menu and `bin` files, mods whose enabled state doesn't match the game folder, mod folders not managed by the manager, leftover priorities, mods installed twice, unmerged script conflicts, mods built on Sharedutils that load after it on Remastered (with a one-click fix), and ReShade problems.
+- **File Conflicts...** shows which mod wins when several mods pack the same file in their bundles.
+- **Back Up Saves Before Updating** copies your newest game saves to the backup folder before updating mods. **Game Save Backups...** lists and restores them.
+
+### Game and Tools
+
+- **Game Settings...** window for `user.settings` and key bindings, and quick access to open the game's config files in Notepad.
+- **ReShade...** shows the installed ReShade version and build (standard or Add-on), enables or disables it, and updates it from reshade.me, keeping the same build.
+
+### Look
+
+- Own window title and claw-marks icon, its own taskbar entry, and a log file (also when run with `pythonw`).
+- Line icons on the toolbar, and fixes to the light theme and status colours.
+
 ## Description
 
 The Witcher 3 Mod Manager is an application that simplifies installing and managing The Witcher 3 mods, originally developed by [stefan3372](https://github.com/stefan3372) and now being continued here.
