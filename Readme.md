@@ -14,13 +14,9 @@ It isn't made or supported by the upstream authors. Please report problems with 
 
 #### Getting Started
 
-There are no release builds of the fork yet, so it runs from source:
+Download `W3MM-casualfork-<version>-setup.exe` from the [releases](https://github.com/mooonski/W3MM-casualfork/releases) and run it. Python isn't needed. It installs for your Windows account only, without an admin prompt, unless you choose to install for all users. Uninstall it from Windows Settings > Apps; your settings, mod list and backups are kept.
 
-1. Install Python 3.10 to 3.12 and [PDM](https://pdm-project.org/en/latest/#recommended-installation-method), and clone this repository.
-2. Install the dependencies with `pdm install --prod`.
-3. Start it with `pdm run start`, or run `main.py` with the environment's `pythonw` for no console window.
-
-The fork also runs on Python 3.13, but PDM won't install for it until `pyproject.toml` allows it.
+To run it from source instead, install Python 3.10 to 3.12 and [PDM](https://pdm-project.org/en/latest/#recommended-installation-method), clone this repository, install the dependencies with `pdm install --prod` and start it with `pdm run start`. The fork also runs on Python 3.13, but PDM won't install for it until `pyproject.toml` allows it.
 
 The fork uses the same configuration location as the upstream manager, so it picks up an existing setup, including `installed.xml`. Back up the configuration directory before trying it, and don't run the fork and the upstream manager at the same time.
 
@@ -193,3 +189,5 @@ Development tools are installed with `pdm install`.
 2. Run the checks with `pdm run check`
 3. Build the executable with `pdm run build-win`
 4. The build is placed in `build/exe.[platform].[python version]`
+
+For the fork's release, run `python packaging/build_release.py` instead of step 3. It builds into `build/W3MM-casualfork-<version>`, copies that to `dist/` without the Qt modules the manager doesn't use (about 290 MB of WebEngine, QML and Designer), and makes `dist/W3MM-casualfork-<version>-setup.exe` with [Inno Setup 6](https://jrsoftware.org/isinfo.php). The version comes from `FORK_VERSION` in `src/globals/constants.py`, and the script stops if that version's folders already exist.

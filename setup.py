@@ -11,7 +11,7 @@ SHORTCUT_TABLE = [
         "DesktopFolder",  # Directory_
         TITLE,  # Name
         "TARGETDIR",  # Component_
-        "[TARGETDIR]TheWitcher3ModManager.exe",  # Target
+        "[TARGETDIR]W3MM-casualfork.exe",  # Target
         None,  # Arguments
         None,  # Description
         None,  # Hotkey
@@ -43,5 +43,5 @@ setup(
     author=AUTHORS[1],
     author_email=AUTHORS_MAIL[1],
     description=TITLE,
-    executables=[Executable("main.py", target_name="TheWitcher3ModManager.exe", icon="res/w3a.ico", base="Win32GUI")],
+    executables=[Executable("main.py", target_name="W3MM-casualfork.exe", icon="res/w3mm-fork.ico", base="gui")],
 )
