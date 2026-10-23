@@ -20,6 +20,8 @@ from src.globals.constants import VERSION
 API_URL = "https://api.nexusmods.com/v1/"
 GAME_DOMAIN = "witcher3"
 APP_NAME = "TW3MM"
+# Sent to Nexus Mods so requests from this fork aren't counted as upstream's
+CLIENT_NAME = "W3MM-casualfork"
 
 # Nexus file categories that are offered as the current version of a mod
 # (UPDATE files are usually patches applied on top of a main file, so they're not offered as replacements)
@@ -442,9 +444,9 @@ class NexusClient:
     def headers(self) -> dict[str, str]:
         return {
             'apikey': self.apikey,
-            'Application-Name': APP_NAME,
+            'Application-Name': CLIENT_NAME,
             'Application-Version': VERSION,
-            'User-Agent': f"{APP_NAME}/{VERSION}",
+            'User-Agent': f"{CLIENT_NAME}/{VERSION}",
             'Accept': 'application/json',
         }
 
@@ -548,7 +550,7 @@ class NexusClient:
         if expectedSize and os.path.isfile(existing) and os.path.getsize(existing) == expectedSize:
             return existing
         partial = uniquePath(directory, filename + '.part')
-        request = urllib.request.Request(encodeUrl(url), headers={'User-Agent': f"{APP_NAME}/{VERSION}"})
+        request = urllib.request.Request(encodeUrl(url), headers={'User-Agent': f"{CLIENT_NAME}/{VERSION}"})
         done = 0
         try:
             with self.opener(request, timeout=self.timeout) as response, open(partial, 'wb') as output:

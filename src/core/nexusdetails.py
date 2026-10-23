@@ -12,7 +12,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
-from src.core.nexus import APP_NAME, GAME_DOMAIN, NexusError, nameKey, safeFileName, similarity
+from src.core.nexus import CLIENT_NAME, GAME_DOMAIN, NexusError, nameKey, safeFileName, similarity
 from src.globals.constants import VERSION
 
 GRAPHQL_URL = "https://api.nexusmods.com/v2/graphql"
@@ -167,9 +167,9 @@ class NexusGraphQL:
             data=body,
             headers={
                 'Content-Type': 'application/json',
-                'Application-Name': APP_NAME,
+                'Application-Name': CLIENT_NAME,
                 'Application-Version': VERSION,
-                'User-Agent': f"{APP_NAME}/{VERSION}",
+                'User-Agent': f"{CLIENT_NAME}/{VERSION}",
             },
         )
         try:
@@ -361,7 +361,7 @@ class DetailsCache:
         if not target or os.path.isfile(target):
             return target
         os.makedirs(self.images, exist_ok=True)
-        request = urllib.request.Request(url, headers={'User-Agent': f"{APP_NAME}/{VERSION}"})
+        request = urllib.request.Request(url, headers={'User-Agent': f"{CLIENT_NAME}/{VERSION}"})
         try:
             with opener(request, timeout=timeout) as response:
                 content = response.read()

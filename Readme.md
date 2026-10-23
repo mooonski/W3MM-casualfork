@@ -8,9 +8,23 @@ Works with Original, Next-Gen, and Remastered installations.
 
 ## About This Fork
 
-This is a personal fork ("casual fork") of [Systemcluster's The Witcher 3 Mod Manager](https://github.com/Systemcluster/The-Witcher-3-Mod-manager), built on version 0.10.5 and developed on the `nexus-updates` branch. It adds Nexus Mods updates and downloads, plus tools that were previously spread over several other programs. The rest of this readme describes the upstream manager, which all of this builds on.
+This is "casual fork", an unofficial fork of [Systemcluster's The Witcher 3 Mod Manager](https://github.com/Systemcluster/The-Witcher-3-Mod-manager), built on version 0.10.5 and developed on the `nexus-updates` branch. It adds Nexus Mods updates and downloads, plus tools that were previously spread over several other programs. The rest of this readme describes the upstream manager, which all of this builds on.
 
-The Nexus features need a Nexus Mods API key, set with **Nexus > Set API Key...**. The key is stored encrypted with Windows DPAPI. Direct downloads need a Premium account; for other accounts, the download page opens in the browser. The fork runs from source on Python 3.13 as well.
+It isn't made or supported by the upstream authors. Please report problems with the fork in this repository's issues, not upstream. It is developed and tested on Windows with Witcher 3 Remastered; the new features haven't been tried on Linux or macOS, and some of them (API key storage, Recycle Bin, the `nxm://` handler) are Windows-only.
+
+#### Getting Started
+
+There are no release builds of the fork yet, so it runs from source:
+
+1. Install Python 3.10 to 3.12 and [PDM](https://pdm-project.org/en/latest/#recommended-installation-method), and clone this repository.
+2. Install the dependencies with `pdm install --prod`.
+3. Start it with `pdm run start`, or run `main.py` with the environment's `pythonw` for no console window.
+
+The fork also runs on Python 3.13, but PDM won't install for it until `pyproject.toml` allows it.
+
+The fork uses the same configuration location as the upstream manager, so it picks up an existing setup, including `installed.xml`. Back up the configuration directory before trying it, and don't run the fork and the upstream manager at the same time.
+
+The Nexus features need a Nexus Mods API key, set with **Nexus > Set API Key...**. Get your personal key from the bottom of the [API keys page](https://next.nexusmods.com/settings/api-keys) on Nexus. The key is stored encrypted with Windows DPAPI and is only sent to Nexus. Direct downloads need a Premium account; for other accounts, the download page opens in the browser.
 
 ### Nexus Mods
 
@@ -78,7 +92,7 @@ See the [Nexus Mods page](https://www.nexusmods.com/witcher3/mods/2678) for rele
 
 ### Release Versions (Windows)
 
-Download the latest release from Nexus Mods or from the [GitHub releases](https://github.com/Systemcluster/The-Witcher-3-Mod-manager/releases).
+These are the upstream releases, without the fork's features. Download the latest release from Nexus Mods or from the [GitHub releases](https://github.com/Systemcluster/The-Witcher-3-Mod-manager/releases).
 
 Existing configuration is picked up automatically when updating. Portable installations keep `config.ini` next to the executable; to update one, copy `config.ini` and `installed.xml` into the new directory.
 
