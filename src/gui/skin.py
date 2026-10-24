@@ -1,8 +1,17 @@
 '''Parts of the window's skin that a style sheet can't draw: the Play button and the mod list's rows'''
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPalette, QPen, QPixmap
-from PySide6.QtWidgets import QApplication, QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QLayout,
+    QPushButton,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QWidget,
+    QWidgetItem,
+)
 
 from src.gui.themes import STEEL, accentColor, isDark, statusColor
 from src.gui.tree_widget import GROUP_ROLE
@@ -104,6 +113,77 @@ class PlayButton(QPushButton):
             painter.setFont(self.modeFont())
             painter.drawText(box, Qt.AlignmentFlag.AlignCenter, self.mode)
         painter.end()
+
+
+class FlowLayout(QLayout):
+    """Lays its widgets out left to right, starting a new line when the next one doesn't fit (the side panel's
+    chips)"""
+
+    def __init__(self, parent: QWidget | None = None, spacing: int = 6):
+        super().__init__(parent)
+        self.items: list = []
+        self.gap = spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item) -> None:
+        self.items.append(item)
+
+    def addWidget(self, widget: QWidget) -> None:
+        self.addChildWidget(widget)
+        self.addItem(QWidgetItem(widget))
+
+    def count(self) -> int:
+        return len(self.items)
+
+    def itemAt(self, index: int):
+        return self.items[index] if 0 <= index < len(self.items) else None
+
+    def takeAt(self, index: int):
+        return self.items.pop(index) if 0 <= index < len(self.items) else None
+
+    def clear(self) -> None:
+        while self.items:
+            item = self.items.pop()
+            if item.widget() is not None:
+                item.widget().deleteLater()
+
+    def expandingDirections(self) -> Qt.Orientation:
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self.arrange(QRect(0, 0, width, 0), move=False)
+
+    def setGeometry(self, rect: QRect) -> None:
+        super().setGeometry(rect)
+        self.arrange(rect, move=True)
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:
+        size = QSize()
+        for item in self.items:
+            size = size.expandedTo(item.minimumSize())
+        return size
+
+    def arrange(self, rect: QRect, move: bool) -> int:
+        x, y, lineHeight = rect.x(), rect.y(), 0
+        for item in self.items:
+            if item.widget() is not None and item.widget().isHidden():
+                continue
+            hint = item.sizeHint()
+            if x + hint.width() > rect.right() + 1 and lineHeight > 0:
+                x = rect.x()
+                y += lineHeight + self.gap
+                lineHeight = 0
+            if move:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x += hint.width() + self.gap
+            lineHeight = max(lineHeight, hint.height())
+        return y + lineHeight - rect.y()
 
 
 class ModListDelegate(QStyledItemDelegate):

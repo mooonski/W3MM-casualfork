@@ -1,4 +1,4 @@
-'''The column of section buttons down the left of the window: pages (Mods, Not Installed, Nexus) and places
+'''The column of section buttons down the left of the window: pages (Mods, Downloads, Nexus) and places
 that open something (Load Order, Health, Saves, Tools, Settings)'''
 
 from collections.abc import Callable
@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QButtonGroup, QFrame, QMenu, QSizePolicy, QToolBut
 
 from src.gui.icons import badgedIcon
 
-BUTTON_SIZE = QSize(70, 58)
+BUTTON_SIZE = QSize(68, 50)
 
 
 class SectionRail(QFrame):
@@ -20,8 +20,8 @@ class SectionRail(QFrame):
         self.setObjectName("rail")
         self.setFixedWidth(BUTTON_SIZE.width() + 14)
         self.layout_ = QVBoxLayout(self)
-        self.layout_.setContentsMargins(7, 10, 7, 10)
-        self.layout_.setSpacing(4)
+        self.layout_.setContentsMargins(7, 8, 7, 8)
+        self.layout_.setSpacing(2)
         self.layout_.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
         self.buttons: dict[str, QToolButton] = {}
         self.icons: dict[str, str] = {}
@@ -37,7 +37,7 @@ class SectionRail(QFrame):
         button.setToolTip(tip or label)
         button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         button.setFixedSize(BUTTON_SIZE)
-        button.setIconSize(QSize(20, 20))
+        button.setIconSize(QSize(18, 18))
         button.setAutoRaise(True)
         button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.buttons[key] = button

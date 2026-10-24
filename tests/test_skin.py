@@ -1,5 +1,6 @@
 '''The Steel skin: the style sheet, the Play button, the mod list's tags, badges and separators, and the filters'''
 
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -8,9 +9,10 @@ from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPalette
 from PySide6.QtWidgets import QApplication, QStyle, QStyleOptionButton, QStyleOptionViewItem, QTreeWidget
 
 from src.core.nexus import FAILED, UP_TO_DATE, UPDATE_AVAILABLE, ModFiles, NexusFile, NexusInfo, UpdateCheck
-from src.core.nexusdetails import ModDetails, Requirement
+from src.core.nexusdetails import DetailsCache, ModDetails, Requirement
 from src.core.requirements import MISSING, MissingRequirement
 from src.domain.mod import Mod
+from src.gui.downloads_widget import DownloadsWidget, Transfer
 from src.gui.icons import badgedIcon, icon
 from src.gui.main_widget import CONTENTS_COLUMN, UPDATE_COLUMN, CustomMainWidget, contentsTags, updateKind
 from src.gui.skin import COMFORTABLE_HEIGHT, GROUP_COUNT_ROLE, UPDATE_KIND_ROLE, ModListDelegate, PlayButton
@@ -277,6 +279,94 @@ class PreviewSectionTests(unittest.TestCase):
         self.assertIn("not installed", text)
         self.assertIn("ReShade", text)
         self.assertIn("bin\\x64_dx12", text, "Nexus's escaped characters are shown as themselves")
+
+
+class TransferTests(unittest.TestCase):
+    '''Downloads in progress on the Downloads page'''
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_progress_text(self):
+        self.assertEqual(Transfer("A", waiting=True).progressText(), "Waiting")
+        self.assertEqual(Transfer("A").progressText(), "Starting...")
+        self.assertEqual(Transfer("A", 1024**2, 4 * 1024**2).progressText(), "1.0 MB of 4.0 MB")
+        self.assertEqual(Transfer("A", 1, 3, inBytes=False).progressText(), "1 of 3")
+
+    def test_panel_shows_running_and_waiting_downloads(self):
+        with tempfile.TemporaryDirectory() as folder:
+            page = DownloadsWidget(None, DetailsCache(folder), lambda: (folder, []), True)
+            self.assertTrue(page.transfersBox.isHidden())
+            page.setTransfers([Transfer("Brothers In Arms", 50, 100), Transfer("Sharedutils", waiting=True)])
+            self.assertFalse(page.transfersBox.isHidden())
+            (name, bar, amount), (_, waitingBar, waiting) = page.transferWidgets
+            self.assertEqual(name.text(), "Brothers In Arms")
+            self.assertEqual(bar.value(), 500)
+            self.assertEqual(waiting.text(), "Waiting")
+            page.setTransfers([Transfer("Brothers In Arms", 75, 100), Transfer("Sharedutils", waiting=True)])
+            self.assertIs(page.transferWidgets[0][1], bar, "the same rows are updated, not built again")
+            self.assertEqual(bar.value(), 750)
+            page.setTransfers([])
+            self.assertTrue(page.transfersBox.isHidden())
+
+    def test_running_and_queued_downloads_are_counted(self):
+        widget = Mock()
+        widget.activeTransfer = Transfer("Brothers In Arms", 5, 10)
+        widget.nxmQueue = ["nxm://witcher3/mods/13650/files/7?key=a&expires=1", "nxm://skyrim/mods/1/files/2"]
+        widget.nexusLabel.return_value = "The Living Continent"
+        widget.notInstalledCount = 4
+        CustomMainWidget.showTransfers(widget)
+        shown = widget.downloads.setTransfers.call_args.args[0]
+        self.assertEqual(
+            [(t.label, t.waiting) for t in shown], [("Brothers In Arms", False), ("The Living Continent", True)]
+        )
+        self.assertEqual(widget.rail.setBadge.call_args.args[:2], ("downloads", 2))
+        widget.activeTransfer, widget.nxmQueue = None, []
+        CustomMainWidget.showTransfers(widget)
+        self.assertEqual(widget.rail.setBadge.call_args.args[:2], ("downloads", 4), "then the archives not installed")
+
+    def test_downloads_register_while_they_run(self):
+        widget = Mock()
+        with patch("src.gui.main_widget.NexusWorker") as worker:
+            CustomMainWidget.runNexus(widget, Mock(), Mock(), download="Sharedutils")
+        transfer = widget.activeTransfer
+        self.assertEqual(transfer.label, "Sharedutils")
+        widget.showTransfers.assert_called()
+        worker.return_value.start.assert_called_once()
+        CustomMainWidget.transferProgressed(widget, transfer, 3, 9)
+        self.assertEqual((transfer.done, transfer.total), (3, 9))
+        CustomMainWidget.transferFinished(widget, transfer)
+        self.assertIsNone(widget.activeTransfer)
+        widget = Mock()
+        widget.activeTransfer = None
+        with patch("src.gui.main_widget.NexusWorker"):
+            CustomMainWidget.runNexus(widget, Mock(), Mock())
+        self.assertIsNone(widget.activeTransfer, "checks and searches aren't downloads")
+
+
+class PictureTests(unittest.TestCase):
+    '''Full-size Nexus pictures for the side panel, kept apart from the thumbnails of the same name'''
+
+    def test_pictures_and_thumbnails_are_kept_apart(self):
+        thumbnailUrl = "https://staticdelivery.nexusmods.com/mods/952/images/thumbnails/659-0-1.jpg"
+        pictureUrl = "https://staticdelivery.nexusmods.com/mods/952/images/659-0-1.jpg"
+        details = ModDetails(659, "Example", thumbnailUrl=thumbnailUrl, pictureUrl=pictureUrl)
+        with tempfile.TemporaryDirectory() as folder:
+            cache = DetailsCache(folder)
+            self.assertNotEqual(cache.imagePath(thumbnailUrl), cache.imagePath(pictureUrl, full=True))
+            self.assertEqual(cache.bestImage(details), "")
+            response = Mock()
+            response.__enter__ = Mock(return_value=Mock(read=Mock(return_value=b"small")))
+            response.__exit__ = Mock(return_value=False)
+            cache.downloadImage(thumbnailUrl, opener=lambda request, timeout: response)
+            self.assertEqual(cache.bestImage(details), cache.image(details), "the thumbnail until the picture is here")
+            response.__enter__ = Mock(return_value=Mock(read=Mock(return_value=b"large")))
+            stored = cache.downloadPicture(pictureUrl, opener=lambda request, timeout: response)
+            self.assertEqual(cache.picture(details), stored)
+            self.assertEqual(cache.bestImage(details), stored)
+            with open(cache.image(details), "rb") as file:
+                self.assertEqual(file.read(), b"small", "the picture didn't overwrite the thumbnail")
 
 
 if __name__ == "__main__":

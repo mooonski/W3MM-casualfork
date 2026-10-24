@@ -1,20 +1,24 @@
-'''The "Not Installed" tab: archives in the archive folder that nothing was installed from'''
+'''The Downloads page: downloads in progress, and archives in the archive folder that nothing was installed from'''
 
 import os
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from PySide6.QtCore import QFileSystemWatcher, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QMenu,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QSplitter,
     QTreeWidget,
@@ -35,6 +39,27 @@ from src.util.util import openFolder, openUrl, plural
 SORT_ROLE = Qt.ItemDataRole.UserRole + 1
 
 NAME, VERSION, DOWNLOADED, SIZE, ARCHIVE, DETAILS = range(6)
+
+
+@dataclass
+class Transfer:
+    '''A download in progress, or one waiting its turn'''
+
+    label: str
+    done: int = 0
+    total: int = 0
+    waiting: bool = False
+    # progress counts bytes (else files)
+    inBytes: bool = True
+
+    def progressText(self) -> str:
+        if self.waiting:
+            return translate("Downloads", "Waiting")
+        if self.total <= 0:
+            return translate("Downloads", "Starting...")
+        if self.inBytes:
+            return f"{sizeText(self.done)} " + translate("Downloads", "of") + f" {sizeText(self.total)}"
+        return f"{self.done} " + translate("Downloads", "of") + f" {self.total}"
 
 
 class SortItem(QTreeWidgetItem):
@@ -100,6 +125,26 @@ class DownloadsWidget(QWidget):
         controls.addWidget(self.refreshButton)
         layout.addLayout(controls)
 
+        # downloads from Nexus while they run, and links waiting their turn
+        self.transfersBox = QFrame(self)
+        self.transfersBox.setObjectName("transfers")
+        transfersLayout = QVBoxLayout(self.transfersBox)
+        transfersLayout.setContentsMargins(10, 8, 10, 8)
+        transfersLayout.setSpacing(6)
+        self.transfersTitle = QLabel(translate("Downloads", "Downloading"), self.transfersBox)
+        self.transfersTitle.setObjectName("transfersTitle")
+        transfersLayout.addWidget(self.transfersTitle)
+        self.transferRows = QGridLayout()
+        self.transferRows.setHorizontalSpacing(12)
+        self.transferRows.setVerticalSpacing(6)
+        self.transferRows.setColumnStretch(0, 3)
+        self.transferRows.setColumnStretch(1, 2)
+        transfersLayout.addLayout(self.transferRows)
+        self.transferWidgets: list[tuple[QLabel, QProgressBar, QLabel]] = []
+        self.transferKeys: list[tuple[str, bool]] = []
+        self.transfersBox.setVisible(False)
+        layout.addWidget(self.transfersBox)
+
         splitter = QSplitter(self)
         self.tree = QTreeWidget(splitter)
         self.tree.setColumnCount(6)
@@ -154,6 +199,43 @@ class DownloadsWidget(QWidget):
             bottom.addWidget(button)
         layout.addLayout(bottom)
         self.updateButtons()
+
+    # ------------------------------------------------------------ downloads in progress
+
+    def setTransfers(self, transfers: list[Transfer]) -> None:
+        '''Shows the running and waiting downloads above the archives, or hides the box when there are none'''
+        self.transfersBox.setVisible(bool(transfers))
+        keys = [(transfer.label, transfer.waiting) for transfer in transfers]
+        if keys != self.transferKeys:
+            for widgets in self.transferWidgets:
+                for widget in widgets:
+                    self.transferRows.removeWidget(widget)
+                    widget.deleteLater()
+            self.transferWidgets = []
+            for row, transfer in enumerate(transfers):
+                name = QLabel(transfer.label, self.transfersBox)
+                name.setToolTip(transfer.label)
+                bar = QProgressBar(self.transfersBox)
+                bar.setObjectName("transferBar")
+                bar.setTextVisible(False)
+                bar.setFixedHeight(6)
+                amount = QLabel(self.transfersBox)
+                amount.setObjectName("transferAmount")
+                self.transferRows.addWidget(name, row, 0)
+                self.transferRows.addWidget(bar, row, 1)
+                self.transferRows.addWidget(amount, row, 2)
+                self.transferWidgets.append((name, bar, amount))
+            self.transferKeys = keys
+        for transfer, (_, bar, amount) in zip(transfers, self.transferWidgets):
+            if transfer.waiting:
+                bar.setRange(0, 1)
+                bar.setValue(0)
+            elif transfer.total <= 0:
+                bar.setRange(0, 0)  # busy until the size is known
+            else:
+                bar.setRange(0, 1000)
+                bar.setValue(min(1000, int(1000 * transfer.done / transfer.total)))
+            amount.setText(transfer.progressText())
 
     # ------------------------------------------------------------ the list
 
@@ -283,7 +365,7 @@ class DownloadsWidget(QWidget):
         modId = self.modId(archive)
         details = self.cache.get(modId) if modId else None
         if details is not None:
-            self.preview.showDetails(details, self.cache.image(details), self.remastered)
+            self.preview.showDetails(details, self.cache.bestImage(details), self.remastered)
             return
         self.preview.showMod(None, None, '')
         self.preview.title.setText(archive.name)

@@ -182,13 +182,19 @@ class MainWindowLayoutTests(LayoutTestCase):
 
     def checkMainWindow(self, window, widget) -> None:
         tabs = [widget.tabs.tabText(i).split(" (")[0] for i in range(widget.tabs.count())]
-        self.assertEqual(tabs, ["Installed", "Not Installed", "Browse Nexus"])
-        actions = widget.toolBar.actions()
-        first = actions.index(widget.actionCheckUpdates)
-        self.assertEqual(actions[first : first + 2], [widget.actionCheckUpdates, widget.actionUpdateMods])
-        self.assertEqual([actions[i].iconText() for i in range(first, first + 2)], ["Check for Updates", "Update"])
-        self.assertEqual(widget.toolBar.iconSize().width(), 20)
-        self.assertFalse(widget.actionUpdateMods.icon().isNull())
+        self.assertEqual(tabs, ["Installed", "Downloads", "Browse Nexus"])
+        # the top bar: the page's title, Check for Updates, Add Mod, Script Merger and Play
+        self.assertEqual(widget.pageTitle.text(), "Mods")
+        self.assertIn("installed", widget.pageSubtitle.text())
+        topButtons = [widget.checkButton, widget.addButton, widget.scriptMergerButton, widget.runGameButton]
+        self.assertEqual(
+            [button.text() for button in topButtons], ["Check for Updates", "Add Mod", "Script Merger", "Play"]
+        )
+        self.assertNoOverlap([widget.pageTitle] + topButtons, window)
+        lefts = [rectIn(button, window).left() for button in topButtons]
+        self.assertEqual(lefts, sorted(lefts))
+        self.assertFalse(widget.updateButton.isVisible(), "Update shows only when updates are waiting")
+        self.assertLess(rectIn(widget.pageTitle, window).right(), rectIn(widget.checkButton, window).left())
         self.assertIn("(casual fork 0.2, source)", window.windowTitle())
         self.assertIs(widget.menubar.cornerWidget(Qt.Corner.TopRightCorner), widget.forkLabel)
         self.assertTrue(widget.forkLabel.isVisible())
@@ -202,20 +208,28 @@ class MainWindowLayoutTests(LayoutTestCase):
         header = widget.treeWidget.header()
         self.assertEqual(header.visualIndex(16), header.visualIndex(2) + 1, "Contents comes after Priority")
         self.assertEqual([c for c in range(17) if header.isSectionHidden(c)], [3, 4, 5, 6, 7, 8, 9])
-        toolbar = [action.iconText() for action in widget.toolBar.actions()]
-        self.assertNotIn("Health Check", toolbar, "it is on the section rail")
-        self.assertIn("History", toolbar)
-        self.assertIn("Folders", toolbar)
-        self.assertIn("Config Files", toolbar)
-
-        # the section rail down the left replaces the tabs
+        # the section rail down the left replaces the tabs and the old toolbar's other buttons
         self.assertFalse(widget.tabs.tabBar().isVisible())
         rail = widget.rail
         self.assertEqual(
             list(rail.buttons),
-            ["mods", "downloads", "nexus", "loadorder", "health", "saves", "tools", "settings"],
+            [
+                "mods",
+                "downloads",
+                "nexus",
+                "loadorder",
+                "health",
+                "saves",
+                "history",
+                "folders",
+                "config",
+                "tools",
+                "settings",
+            ],
         )
+        self.assertLessEqual(rail.sizeHint().height(), widget.railScroll.height(), "all of it fits at 720 high")
         self.assertTrue(rail.buttons["mods"].isChecked())
+        self.assertEqual(rail.buttons["downloads"].text(), "Downloads")
         self.assertEqual(rectIn(rail, window).left(), 0)
         self.assertLess(rectIn(rail, window).right(), rectIn(widget.tabs, window).left())
         for button in rail.buttons.values():
@@ -228,10 +242,11 @@ class MainWindowLayoutTests(LayoutTestCase):
         rail.buttons["mods"].click()
         settle(self.app)
 
-        # Script Merger and Play sit together at the right end of the toolbar row
-        self.assertNoOverlap([widget.scriptMergerButton, widget.runGameButton], window)
-        self.assertLess(rectIn(widget.scriptMergerButton, window).right(), rectIn(widget.runGameButton, window).left())
+        # Play sits at the right end of the top bar
         self.assertGreater(rectIn(widget.runGameButton, window).right(), window.width() - 40)
+        widget.tabs.setCurrentWidget(widget.browse)
+        self.assertEqual(widget.pageTitle.text(), "Nexus")
+        widget.tabs.setCurrentWidget(widget.installedTab)
         self.assertEqual(widget.runGameButton.text(), "Play")
         self.assertGreaterEqual(widget.runGameButton.width(), widget.runGameButton.sizeHint().width())
 
@@ -246,11 +261,27 @@ class MainWindowLayoutTests(LayoutTestCase):
         for button in buttons:
             self.assertInside(button, window)
 
-        right = widget.verticalSplitter_right
-        self.assertLess(rectIn(widget.preview, right).bottom(), rectIn(widget.loadOrder, right).top())
-        self.assertGreaterEqual(widget.preview.height(), 150, "the preview needs room for its picture")
-        self.assertGreaterEqual(widget.loadOrder.height(), 100, "the load order needs room too")
-        self.assertNoOverlap([widget.treeWidget, right], widget.horizontalSplitter_tree)
+        # the side panel shows the details, or the load order in the same place
+        side = widget.sidePanel
+        self.assertNoOverlap([widget.treeWidget, side], widget.horizontalSplitter_tree)
+        self.assertGreaterEqual(side.width(), 320)
+        self.assertTrue(widget.preview.isVisible())
+        self.assertFalse(widget.loadOrder.isVisible())
+        self.assertGreaterEqual(widget.preview.height(), 300, "the details need room for the picture")
+        rail.buttons["loadorder"].click()
+        settle(self.app)
+        self.assertTrue(widget.loadOrder.isVisible())
+        self.assertFalse(widget.preview.isVisible())
+        self.assertTrue(rail.buttons["loadorder"].isChecked())
+        self.assertTrue(widget.sideButtons["loadorder"].isChecked())
+        self.assertEqual(rectIn(widget.loadOrder, side).top(), rectIn(widget.preview, side).top())
+        widget.sideButtons["details"].click()
+        settle(self.app)
+        self.assertTrue(widget.preview.isVisible())
+        self.assertFalse(rail.buttons["loadorder"].isChecked(), "the rail button follows the panel")
+        rail.buttons["loadorder"].click()
+        rail.buttons["loadorder"].click()
+        self.assertTrue(widget.preview.isVisible(), "a second click goes back to the details")
 
         # the log is closed until asked for; the status row runs along the bottom
         self.assertFalse(widget.textEdit.isVisible())

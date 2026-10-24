@@ -206,9 +206,15 @@ class BrowseWidget(QWidget):
         self.updateButtons()
         if details is None:
             return
-        self.preview.showDetails(details, self.cache.image(details), self.remastered)
-        if not self.cache.image(details) and details.thumbnailUrl:
+        self.preview.showDetails(details, self.cache.bestImage(details), self.remastered)
+        if self.needsImage(details):
             self.loadImage(details)
+
+    def needsImage(self, details: ModDetails) -> bool:
+        '''The full-size picture isn't downloaded yet (or, for a mod without one, the thumbnail)'''
+        if details.pictureUrl:
+            return not self.cache.picture(details)
+        return bool(details.thumbnailUrl) and not self.cache.image(details)
 
     def loadImage(self, details: ModDetails) -> None:
         if self.imageWorker is not None and self.imageWorker.isRunning():
@@ -216,6 +222,8 @@ class BrowseWidget(QWidget):
         cache = self.cache
 
         def work(progress):
+            if details.pictureUrl:
+                return cache.downloadPicture(details.pictureUrl)
             return cache.downloadImage(details.thumbnailUrl)
 
         worker = NexusWorker(work, self)
@@ -226,8 +234,8 @@ class BrowseWidget(QWidget):
     def imageLoaded(self, details: ModDetails) -> None:
         current = self.selected()
         if current is not None and current.modId == details.modId:
-            self.preview.showDetails(details, self.cache.image(details), self.remastered)
-        elif current is not None and not self.cache.image(current) and current.thumbnailUrl:
+            self.preview.showDetails(details, self.cache.bestImage(details), self.remastered)
+        elif current is not None and self.needsImage(current):
             self.loadImage(current)
 
     def updateButtons(self) -> None:

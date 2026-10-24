@@ -156,7 +156,12 @@ QMenu::item:selected { background: $selection; color: #ffffff; }
 QMenu::item:disabled { color: $faint; }
 QMenu::separator { height: 1px; background: $line; margin: 4px 8px; }
 QToolBar#toolBar, QToolBar#launchBar { background: $panel; border: none; border-bottom: 1px solid $line; spacing: 2px; }
-QToolBar#toolBar { padding: 6px 4px 6px 10px; }
+QToolBar#toolBar { padding: 8px 12px 8px 6px; }
+QLabel#pageTitle { font-size: 15pt; font-weight: 800; }
+QLabel#pageSubtitle { color: $muted; }
+QPushButton[top="true"] { padding: 7px 14px; font-weight: 600; }
+QPushButton#updateAllButton { background: $accent; color: #ffffff; border: none; }
+QPushButton#updateAllButton:hover { background: $accentHover; }
 QToolBar#launchBar { padding: 6px 12px 6px 4px; }
 QToolBar::separator { width: 1px; background: $line; margin: 12px 7px; }
 QToolBar QToolButton { background: transparent; color: $text; border: none; border-radius: 8px; padding: 4px 7px; }
@@ -192,7 +197,7 @@ QFrame#statusRow { background: $panel; border-top: 1px solid $line; }
 QLabel#statusText, QLabel#summaryText { color: $muted; }
 QWidget#modPreview { background: $panel; border: 1px solid $line; border-radius: 10px; }
 QWidget#modPreview QScrollArea, QWidget#modPreview QScrollArea > QWidget > QWidget { background: transparent; }
-QLabel#previewTitle { font-size: 11pt; font-weight: 700; }
+QLabel#previewTitle { font-size: 13pt; font-weight: 800; }
 QLabel#previewMeta { color: $muted; }
 QProgressBar#progressBar { background: $raised; border: none; border-radius: 2px; }
 QProgressBar#progressBar::chunk { background: $accent; border-radius: 2px; }
@@ -205,11 +210,29 @@ QScrollBar::handle:hover { background: #3f464f; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: none; }
 QSplitter::handle { background: transparent; }
-QFrame#rail { background: $bg; border-right: 1px solid $line; }
+QFrame#rail, QScrollArea#railScroll { background: $bg; border: none; }
+QScrollArea#railScroll { border-right: 1px solid $line; }
 QToolButton[rail="true"] { background: transparent; color: $muted; border: none; border-radius: 8px; padding: 4px 0; font-size: 8pt; }
 QToolButton[rail="true"]:hover { background: $hover; color: $text; }
 QToolButton[rail="true"]:checked { background: $selection; color: #ffffff; }
 QTabBar#previewTabs::tab { padding: 6px 0; margin: 0 14px 0 0; }
+QFrame#segment { background: $bg; border: 1px solid $line; border-radius: 8px; }
+QPushButton[segment="true"] { background: transparent; color: $muted; border: none; border-radius: 6px; padding: 5px 10px; font-weight: 600; }
+QPushButton[segment="true"]:hover { color: $text; }
+QPushButton[segment="true"]:checked { background: $raised; color: $text; }
+QLabel[chip="true"], QLabel[chip="ok"], QLabel[chip="muted"], QLabel[chip="update"] { background: $raised; color: $muted; border: 1px solid $line; border-radius: 4px; padding: 2px 8px; font-weight: 600; }
+QLabel[chip="ok"] { color: #6fcf97; }
+QLabel[chip="update"] { color: $blue; background: $blueSoft; border-color: $blueSoft; }
+QPushButton#previewUpdate { background: $accent; color: #ffffff; border: none; font-weight: 600; }
+QPushButton#previewUpdate:hover { background: $accentHover; }
+QToolButton#previewMore { background: $raised; color: $text; border: 1px solid $line; border-radius: 6px; padding: 4px 10px; }
+QToolButton#previewMore:hover { background: $hover; }
+QToolButton#previewMore::menu-indicator { image: none; width: 0; }
+QFrame#transfers { background: $raised; border: 1px solid $line; border-radius: 8px; }
+QLabel#transfersTitle { font-weight: 700; }
+QLabel#transferAmount { color: $muted; }
+QProgressBar#transferBar { background: $bg; border: none; border-radius: 3px; }
+QProgressBar#transferBar::chunk { background: $accent; border-radius: 3px; }
 ''')
 
 

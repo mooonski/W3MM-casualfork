@@ -526,9 +526,6 @@ class Configuration:
         hsplit = ui.horizontalSplitter_tree.sizes()
         self.set('WINDOW', 'hsplit0', str(hsplit[0]))
         self.set('WINDOW', 'hsplit1', str(hsplit[1]))
-        vsplit = ui.verticalSplitter_right.sizes()
-        self.set('WINDOW', 'vsplit0', str(vsplit[0]))
-        self.set('WINDOW', 'vsplit1', str(vsplit[1]))
 
     def setDefaultWindow(self):
         self.set('WINDOW', 'width', '1024')

@@ -188,9 +188,11 @@ class MainWindowTests(unittest.TestCase):
         widget = Mock()
         widget.tabs.indexOf.return_value = 1
         CustomMainWidget.downloadsCounted(widget, 9)
-        widget.tabs.setTabText.assert_called_with(1, "Not Installed (9)")
+        widget.tabs.setTabText.assert_called_with(1, "Downloads (9)")
+        widget.showTransfers.assert_called()
+        self.assertEqual(widget.notInstalledCount, 9)
         CustomMainWidget.downloadsCounted(widget, 0)
-        widget.tabs.setTabText.assert_called_with(1, "Not Installed")
+        widget.tabs.setTabText.assert_called_with(1, "Downloads")
 
     def test_details_are_asked_for_once(self):
         widget = Mock(detailsAsked=set(), detailsWorker=None)

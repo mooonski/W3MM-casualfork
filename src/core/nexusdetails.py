@@ -342,11 +342,14 @@ class DetailsCache:
             }
         )
 
-    def imagePath(self, url: str) -> str:
+    def imagePath(self, url: str, full: bool = False) -> str:
+        '''Where a thumbnail is kept; full pictures go in a folder of their own, as Nexus gives a mod's thumbnail
+        and its picture the same file name'''
         if not url:
             return ''
         name = safeFileName(urllib.parse.unquote(os.path.basename(urllib.parse.urlparse(url).path)))
-        return os.path.join(self.images, name) if name else ''
+        folder = os.path.join(self.images, 'full') if full else self.images
+        return os.path.join(folder, name) if name else ''
 
     def image(self, details: ModDetails | None) -> str:
         '''The downloaded thumbnail of a mod, or ""'''
@@ -355,12 +358,31 @@ class DetailsCache:
         image = self.imagePath(details.thumbnailUrl)
         return image if image and os.path.isfile(image) else ''
 
-    def downloadImage(self, url: str, opener: Callable[..., Any] = urllib.request.urlopen, timeout: float = 30) -> str:
+    def picture(self, details: ModDetails | None) -> str:
+        '''The downloaded full-size picture of a mod, or ""'''
+        if details is None:
+            return ''
+        picture = self.imagePath(details.pictureUrl, full=True)
+        return picture if picture and os.path.isfile(picture) else ''
+
+    def bestImage(self, details: ModDetails | None) -> str:
+        '''The full-size picture when it's downloaded, else the thumbnail, else ""'''
+        return self.picture(details) or self.image(details)
+
+    def downloadPicture(
+        self, url: str, opener: Callable[..., Any] = urllib.request.urlopen, timeout: float = 30
+    ) -> str:
+        '''Downloads a full-size picture once; later calls return the stored file'''
+        return self.downloadImage(url, opener, timeout, full=True)
+
+    def downloadImage(
+        self, url: str, opener: Callable[..., Any] = urllib.request.urlopen, timeout: float = 30, full: bool = False
+    ) -> str:
         '''Downloads an image once; later calls return the stored file'''
-        target = self.imagePath(url)
+        target = self.imagePath(url, full)
         if not target or os.path.isfile(target):
             return target
-        os.makedirs(self.images, exist_ok=True)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
         request = urllib.request.Request(url, headers={'User-Agent': f"{CLIENT_NAME}/{VERSION}"})
         try:
             with opener(request, timeout=timeout) as response:

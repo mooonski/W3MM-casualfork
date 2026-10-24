@@ -42,12 +42,13 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QTabWidget,
     QTextEdit,
     QToolBar,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -136,7 +137,7 @@ from src.gui.archives_dialog import RECYCLE, ArchiveCleanupDialog, sizeText
 from src.gui.browse_widget import BrowseWidget
 from src.gui.conflicts_dialog import FileConflictsDialog
 from src.gui.details_dialog import DetailsDialog
-from src.gui.downloads_widget import DownloadsWidget
+from src.gui.downloads_widget import DownloadsWidget, Transfer
 from src.gui.health_dialog import HealthDialog
 from src.gui.history_dialog import DownloadHistoryDialog
 from src.gui.icons import badgedIcon, icon
@@ -291,8 +292,12 @@ class CustomMainWidget(QWidget):
         self.endorsementsWorker: NexusWorker | None = None
         self.endorseWorker: NexusWorker | None = None
         self.detailsWorker: NexusWorker | None = None
+        self.pictureWorker: NexusWorker | None = None
         self.requirementsWorker: NexusWorker | None = None
         self.loadOrderFocus = ""
+        # the Nexus download running now, shown on the Downloads page with the links waiting their turn
+        self.activeTransfer: Transfer | None = None
+        self.notInstalledCount = 0
         # shown as counts on the Update and Health Check buttons
         self.updateCount = 0
         self.healthCount = 0
@@ -334,11 +339,7 @@ class CustomMainWidget(QWidget):
 
         QMetaObject.connectSlotsByName(self.mainWindow)
 
-        def windowResized(_event) -> None:
-            self.fitToolbar()
-            self.onResize()
-
-        self.mainWindow.resizeEvent = windowResized  # type: ignore
+        self.mainWindow.resizeEvent = lambda e: self.onResize()  # type: ignore
         self.loadOrder.header().sectionResized.connect(lambda: self.onResize())
         self.treeWidget.header().sectionResized.connect(lambda: self.onResize())
 
@@ -437,28 +438,54 @@ class CustomMainWidget(QWidget):
         self.brandLabel.setToolTip(TITLE)
         self.menubar.setCornerWidget(self.brandLabel, Qt.Corner.TopLeftCorner)
 
+        # the top bar: the page's title, then Check for Updates, Update, Add Mod, Script Merger and Play
         self.toolBar = QToolBar(self.mainWindow)
         self.toolBar.setObjectName("toolBar")
         self.toolBar.setMovable(False)
         self.mainWindow.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.toolBar)
-
-        # Script Merger and Play at the right end of the toolbar row; the last toolbar in a row takes the space left
-        self.launchBar = QToolBar(self.mainWindow)
-        self.launchBar.setObjectName("launchBar")
-        self.launchBar.setMovable(False)
-        spacer = QWidget(self.launchBar)
+        heading = QWidget(self.toolBar)
+        headingLayout = QVBoxLayout(heading)
+        headingLayout.setContentsMargins(8, 0, 20, 0)
+        headingLayout.setSpacing(0)
+        self.pageTitle = QLabel(heading)
+        self.pageTitle.setObjectName("pageTitle")
+        self.pageSubtitle = QLabel(heading)
+        self.pageSubtitle.setObjectName("pageSubtitle")
+        headingLayout.addWidget(self.pageTitle)
+        headingLayout.addWidget(self.pageSubtitle)
+        self.toolBar.addWidget(heading)
+        spacer = QWidget(self.toolBar)
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.launchBar.addWidget(spacer)
-        self.scriptMergerButton = QPushButton(self.launchBar)
+        self.toolBar.addWidget(spacer)
+        # programs the user put on the bar go before Check for Updates
+        self.customToolbarActions: list[QAction] = []
+        self.checkButton = QPushButton(self.toolBar)
+        self.checkButton.setObjectName("checkButton")
+        self.checkButton.setProperty("top", True)
+        self.checkButton.clicked.connect(lambda: self.actionCheckUpdates.trigger())
+        self.checkButtonAction = self.toolBar.addWidget(self.checkButton)
+        self.updateButton = QPushButton(self.toolBar)
+        self.updateButton.setObjectName("updateAllButton")
+        self.updateButton.setProperty("top", True)
+        self.updateButton.clicked.connect(lambda: self.actionUpdateMods.trigger())
+        self.updateButtonAction = self.toolBar.addWidget(self.updateButton)
+        self.updateButtonAction.setVisible(False)
+        self.addButton = QPushButton(self.toolBar)
+        self.addButton.setObjectName("addButton")
+        self.addButton.setProperty("top", True)
+        self.addButton.clicked.connect(lambda: self.actionInstall_Mods.trigger())
+        self.toolBar.addWidget(self.addButton)
+        self.toolBar.addSeparator()
+        self.scriptMergerButton = QPushButton(self.toolBar)
         self.scriptMergerButton.setObjectName("scriptMergerButton")
-        self.launchBar.addWidget(self.scriptMergerButton)
-        gap = QWidget(self.launchBar)
+        self.scriptMergerButton.setProperty("top", True)
+        self.toolBar.addWidget(self.scriptMergerButton)
+        gap = QWidget(self.toolBar)
         gap.setFixedWidth(8)
-        self.launchBar.addWidget(gap)
-        self.runGameButton = PlayButton(self.launchBar)
+        self.toolBar.addWidget(gap)
+        self.runGameButton = PlayButton(self.toolBar)
         self.runGameButton.setObjectName("runGameButton")
-        self.launchBar.addWidget(self.runGameButton)
-        self.mainWindow.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.launchBar)
+        self.toolBar.addWidget(self.runGameButton)
 
     def setupUI(self):
         '''Setup all UI components'''
@@ -478,7 +505,15 @@ class CustomMainWidget(QWidget):
         self.bodyRow.setContentsMargins(0, 0, 0, 0)
         self.bodyRow.setSpacing(0)
         self.rail = SectionRail(self.centralwidget)
-        self.bodyRow.addWidget(self.rail)
+        # in a short window the rail scrolls rather than squeezing its buttons
+        self.railScroll = QScrollArea(self.centralwidget)
+        self.railScroll.setObjectName("railScroll")
+        self.railScroll.setWidget(self.rail)
+        self.railScroll.setWidgetResizable(True)
+        self.railScroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.railScroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.railScroll.setFixedWidth(self.rail.width())
+        self.bodyRow.addWidget(self.railScroll)
         self.bodyRow.addLayout(self.contentLayout, 1)
         self.verticalLayout_2.addLayout(self.bodyRow, 1)
 
@@ -528,7 +563,7 @@ class CustomMainWidget(QWidget):
         self.downloads.installRequested.connect(self.installModFiles)
         self.downloads.countChanged.connect(self.downloadsCounted)
         self.downloads.detailsWanted.connect(self.downloadDetailsWanted)
-        self.tabs.addTab(self.downloads, translate("MainWindow", "Not Installed"))
+        self.tabs.addTab(self.downloads, translate("MainWindow", "Downloads"))
 
         self.browse = BrowseWidget(
             self.tabs, self.nexusDetails, lambda: set(self.linkedModIds()), data.getConfig().gameversion == "re"
@@ -578,18 +613,40 @@ class CustomMainWidget(QWidget):
         self.loadOrder.setMinimumWidth(200)
         self.loadOrder.setSortingEnabled(False)
 
-        # Configure splitter
-        # the preview of the selected mod sits above the load order
+        # The side panel shows the selected mod's details, or the load order (Load Order on the rail, or its switch)
         self.preview = ModPreview(self.centralwidget)
         self.preview.changelogWanted.connect(self.loadChangelog)
-        self.verticalSplitter_right = QSplitter(Qt.Orientation.Vertical)
-        self.verticalSplitter_right.setObjectName("verticalSplitter_right")
-        self.verticalSplitter_right.setHandleWidth(10)
-        self.verticalSplitter_right.addWidget(self.preview)
-        self.verticalSplitter_right.addWidget(self.loadOrder)
-        self.verticalSplitter_right.setStretchFactor(0, 1)
-        self.verticalSplitter_right.setStretchFactor(1, 1)
-        self.horizontalSplitter_tree.addWidget(self.verticalSplitter_right)
+        self.preview.nexusRequested.connect(self.openNexusPage)
+        self.preview.endorseRequested.connect(self.endorseSelected)
+        self.preview.updateRequested.connect(self.updateSelectedMods)
+        self.sidePanel = QFrame(self.centralwidget)
+        self.sidePanel.setObjectName("sidePanel")
+        self.sidePanel.setMinimumWidth(320)
+        side = QVBoxLayout(self.sidePanel)
+        side.setContentsMargins(0, 0, 0, 0)
+        side.setSpacing(8)
+        segment = QFrame(self.sidePanel)
+        segment.setObjectName("segment")
+        segmentRow = QHBoxLayout(segment)
+        segmentRow.setContentsMargins(3, 3, 3, 3)
+        segmentRow.setSpacing(2)
+        self.sideButtons: dict[str, QPushButton] = {}
+        sideGroup = QButtonGroup(segment)
+        for key in ("details", "loadorder"):
+            button = QPushButton(segment)
+            button.setObjectName(f"side_{key}")
+            button.setProperty("segment", True)
+            button.setCheckable(True)
+            button.clicked.connect(lambda _=False, k=key: self.showSideView(k))
+            sideGroup.addButton(button)
+            segmentRow.addWidget(button, 1)
+            self.sideButtons[key] = button
+        side.addWidget(segment)
+        self.sideStack = QStackedWidget(self.sidePanel)
+        self.sideStack.addWidget(self.preview)
+        self.sideStack.addWidget(self.loadOrder)
+        side.addWidget(self.sideStack, 1)
+        self.horizontalSplitter_tree.addWidget(self.sidePanel)
         self.horizontalSplitter_tree.setCollapsible(0, False)
         self.horizontalSplitter_tree.setCollapsible(1, True)
         self.horizontalSplitter_tree.setStretchFactor(0, 3)
@@ -810,70 +867,50 @@ class CustomMainWidget(QWidget):
         openFile(getattr(data.getConfig(), option))
 
     def configureToolbar(self):
-        '''Creates and configures toolbar: mod actions, Nexus, checks, then folders and config files as menus'''
-        self.toolBar.clear()
+        """Draws the top bar's icons again (theme changes) and puts the user's programs on it"""
         self.applyIcons()
         self.toolBar.setIconSize(QSize(20, 20))
-
-        self.toolBar.addAction(self.actionInstall_Mods)
-        self.toolBar.addAction(self.actionUninstall_Mods)
-        self.toolBar.addAction(self.actionEnable_Disable_Mods)
-        self.toolBar.addSeparator()
-        self.toolBar.addAction(self.actionCheckUpdates)
-        self.toolBar.addAction(self.actionUpdateMods)
-        self.toolBar.addSeparator()
-        # Health Check is on the section rail, with its count
-        self.toolBar.addAction(self.actionDownloadHistory)
         self.actionRefresh_Mod_List.setToolTip(
             translate("MainWindow", "Read mods.settings and the mods again, e.g. after editing them outside (F5)")
         )
-        self.toolBar.addAction(self.actionRefresh_Mod_List)
-        self.toolBar.addSeparator()
+        for action in self.customToolbarActions:
+            self.toolBar.removeAction(action)
+        self.customToolbarActions = []
+        for custom in data.getConfig().getOptions("TOOLBAR"):
+            self.addToToolbar(custom)
+        self.actionAddToToolbar = QAction(self.mainWindow)
+        self.actionAddToToolbar.triggered.connect(self.addToToolbar)
+        self.actionAddToToolbar.setText(translate("MainWindow", "Add New.."))
 
-        folders = QMenu(self.mainWindow)
+    def foldersMenu(self) -> QMenu:
+        menu = QMenu(self.mainWindow)
         for key, label, name in (
             ("mods", translate("MainWindow", "Mods"), "mods"),
             ("dlc", translate("MainWindow", "DLC"), "dlc"),
             ("menu", translate("MainWindow", "Menus"), "menus"),
             ("settings", translate("MainWindow", "Settings"), "folder"),
         ):
-            folders.addAction(icon(name), label, lambda k=key: self.openByConfigKey(k))
-        self.actionFolders = self.dropDownAction(
-            folders, translate("MainWindow", "Folders"), "folder", translate("MainWindow", "Open a game folder")
-        )
+            menu.addAction(icon(name), label, lambda k=key: self.openByConfigKey(k))
+        return menu
 
-        configs = QMenu(self.mainWindow)
-        configs.setToolTipsVisible(True)
-        configs.addAction(
+    def configFilesMenu(self) -> QMenu:
+        menu = QMenu(self.mainWindow)
+        menu.setToolTipsVisible(True)
+        menu.addAction(
             icon("xml"),
             translate("MainWindow", "Input Xml"),
             lambda: openTextFile(data.getConfig().menu + "/input.xml"),
         ).setToolTip(translate("MainWindow", "Open input.xml file"))
-        configs.addAction(
+        menu.addAction(
             icon("keyboard"), translate("MainWindow", "Input Settings"), lambda: self.showGameSettings(KEYS_TAB)
         ).setToolTip(translate("MainWindow", "Your key bindings (input.settings), with the ones from your mods"))
-        configs.addAction(
+        menu.addAction(
             icon("sliders"), translate("MainWindow", "User Settings"), lambda: self.showGameSettings(USER_TAB)
         ).setToolTip(translate("MainWindow", "The game's settings (user.settings), including your mods' options"))
-        configs.addAction(icon("order"), translate("MainWindow", "Mods Settings"), self.showLoadOrderPanel).setToolTip(
-            translate("MainWindow", "The load order (mods.settings) is the list on the right; drag mods to change it")
+        menu.addAction(icon("order"), translate("MainWindow", "Mods Settings"), self.showLoadOrderPanel).setToolTip(
+            translate("MainWindow", "The load order (mods.settings), shown in the side panel; drag mods to move them")
         )
-        self.actionConfigFiles = self.dropDownAction(
-            configs,
-            translate("MainWindow", "Config Files"),
-            "sliders",
-            translate("MainWindow", "The game's input and settings files"),
-        )
-
-        self.toolBar.addSeparator()
-
-        self.builtInToolbarActions = len(self.toolBar.actions())
-        for custom in data.getConfig().getOptions("TOOLBAR"):
-            self.addToToolbar(custom)
-        self.actionAddToToolbar = QAction(self.mainWindow)
-        self.actionAddToToolbar.triggered.connect(self.addToToolbar)
-        self.actionAddToToolbar.setText(translate("MainWindow", "Add New.."))
-        self.measureToolbar()
+        return menu
 
     def configureRail(self) -> None:
         '''The section buttons: the three pages instead of tabs, then places that open something'''
@@ -881,18 +918,18 @@ class CustomMainWidget(QWidget):
         rail.addPage("mods", translate("MainWindow", "Mods"), "grid", translate("MainWindow", "The installed mods"))
         rail.addPage(
             "downloads",
-            translate("MainWindow", "Archives"),
-            "inbox",
-            translate("MainWindow", "Downloaded archives that aren't installed"),
+            translate("MainWindow", "Downloads"),
+            "update",
+            translate("MainWindow", "Downloads in progress, and downloaded archives that aren't installed"),
         )
         rail.addPage("nexus", translate("MainWindow", "Nexus"), "globe", translate("MainWindow", "Browse Nexus"))
         rail.addPlace(
             "loadorder",
             translate("MainWindow", "Load Order"),
             "order",
-            translate("MainWindow", "The load order beside the mod list (mods.settings)"),
+            translate("MainWindow", "Show the load order (mods.settings) in the side panel, or the details again"),
             self.showLoadOrderFromRail,
-        )
+        ).setCheckable(True)
         rail.addPlace(
             "health",
             translate("MainWindow", "Health"),
@@ -907,6 +944,27 @@ class CustomMainWidget(QWidget):
             translate("MainWindow", "Copies of your newest saves, made before updates"),
             self.showSaveBackups,
         )
+        rail.addPlace(
+            "history",
+            translate("MainWindow", "History"),
+            "history",
+            translate("MainWindow", "Files downloaded from Nexus, what became of them, and installing them again"),
+            self.showDownloadHistory,
+        )
+        rail.addMenu(
+            "folders",
+            translate("MainWindow", "Folders"),
+            "folder",
+            translate("MainWindow", "Open a game folder"),
+            self.foldersMenu(),
+        )
+        rail.addMenu(
+            "config",
+            translate("MainWindow", "Config"),
+            "xml",
+            translate("MainWindow", "The game's input and settings files"),
+            self.configFilesMenu(),
+        )
         tools = QMenu(self.mainWindow)
         for action in (
             self.actionRun_Script_Merger,
@@ -916,6 +974,8 @@ class CustomMainWidget(QWidget):
             None,
             self.actionReShade,
             self.actionGameSettings,
+            None,
+            self.actionRefresh_Mod_List,
         ):
             if action is None:
                 tools.addSeparator()
@@ -933,8 +993,32 @@ class CustomMainWidget(QWidget):
         rail.pageChosen.connect(self.showPage)
         self.tabs.tabBar().hide()
         self.tabs.currentChanged.connect(lambda _: rail.setCurrent(self.pageKey()))
+        self.tabs.currentChanged.connect(lambda _: self.showPageTitle())
         rail.setCurrent(self.pageKey())
         rail.setBadge("health", self.healthCount, statusColor("warning"))
+        more = QMenu(self.mainWindow)
+        for action in (
+            self.actionOpenFolder,
+            self.actionChooseFile,
+            self.actionSetNexusMod,
+            self.actionRestoreBackup,
+            None,
+            self.actionRename,
+            self.actionReinstallFiles,
+            self.actionEnable_Disable_Mods,
+            self.actionUninstall_Mods,
+        ):
+            if action is None:
+                more.addSeparator()
+            else:
+                more.addAction(action)
+        self.preview.setMoreMenu(more)
+        self.sideButtons["details"].setText(translate("MainWindow", "Details"))
+        self.sideButtons["loadorder"].setText(translate("MainWindow", "Load Order"))
+        self.sideButtons["loadorder"].setToolTip(
+            translate("MainWindow", "The order the game loads mods in (mods.settings); drag a mod to move it")
+        )
+        self.showSideView("loadorder" if data.getConfig().get("WINDOW", "sideview") == "loadorder" else "details")
 
     def pageWidgets(self) -> dict:
         return {"mods": self.installedTab, "downloads": self.downloads, "nexus": self.browse}
@@ -947,42 +1031,41 @@ class CustomMainWidget(QWidget):
         self.tabs.setCurrentWidget(self.pageWidgets()[key])
 
     def showLoadOrderFromRail(self) -> None:
+        '''Load Order on the rail switches the side panel to the load order, and back to the details'''
         self.showPage("mods")
-        self.showLoadOrderPanel()
+        self.showSideView("details" if self.sideStack.currentWidget() is self.loadOrder else "loadorder")
 
-    def measureToolbar(self) -> None:
-        '''How wide the toolbar is with its labels, to drop them when the window is too narrow (see fitToolbar)'''
-        self.toolBar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-        self.labelledToolbarWidth = self.toolBar.sizeHint().width()
-        self.fitToolbar()
+    def showSideView(self, key: str) -> None:
+        '''The side panel shows the selected mod's details ("details") or the load order ("loadorder")'''
+        loadOrder = key == "loadorder"
+        self.sideStack.setCurrentWidget(self.loadOrder if loadOrder else self.preview)
+        self.sideButtons[key].setChecked(True)
+        if "loadorder" in self.rail.buttons:
+            self.rail.buttons["loadorder"].setChecked(loadOrder)
+        data.getConfig().set("WINDOW", "sideview", key, write=False)
+        if loadOrder:
+            self.showModInLoadOrder()
 
-    def fitToolbar(self) -> None:
-        '''Icons only on the toolbar when its labels would push Script Merger and Play off the window'''
-        room = self.mainWindow.width() - self.launchBar.sizeHint().width() - 16
-        style = Qt.ToolButtonStyle.ToolButtonTextUnderIcon
-        if self.labelledToolbarWidth > room:
-            style = Qt.ToolButtonStyle.ToolButtonIconOnly
-        if self.toolBar.toolButtonStyle() != style:
-            self.toolBar.setToolButtonStyle(style)
-            # the toolbar sets every button's style; the menu buttons keep their labels
-            for action in (self.actionFolders, self.actionConfigFiles):
-                button = self.toolBar.widgetForAction(action)
-                if isinstance(button, QToolButton):
-                    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-
-    def dropDownAction(self, menu: QMenu, label: str, iconName: str, tip: str) -> QAction:
-        '''A toolbar button that opens a menu, with its label beside the icon'''
-        action = QAction(icon(iconName), label, self.mainWindow)
-        action.setToolTip(tip)
-        action.setMenu(menu)
-        self.toolBar.addAction(action)
-        button = self.toolBar.widgetForAction(action)
-        if isinstance(button, QToolButton):
-            button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-            button.setIconSize(QSize(16, 16))
-            button.setText(label + "  ▾")
-        return action
+    def showPageTitle(self) -> None:
+        """The top bar's title and the line under it, for the page shown"""
+        key = self.pageKey()
+        if key == "downloads":
+            title = translate("MainWindow", "Downloads")
+            waiting = len(self.nxmQueue) + (1 if self.activeTransfer is not None else 0)
+            subtitle = plural(self.notInstalledCount, translate("MainWindow", "archive"))
+            subtitle += " " + translate("MainWindow", "not installed")
+            if waiting:
+                subtitle += f" · {waiting} " + translate("MainWindow", "downloading")
+        elif key == "nexus":
+            title = translate("MainWindow", "Nexus")
+            subtitle = translate("MainWindow", "Find mods and install them")
+        else:
+            title = translate("MainWindow", "Mods")
+            mods = self.model.all()
+            subtitle = plural(len(mods), translate("MainWindow", "mod")) + " " + translate("MainWindow", "installed")
+            subtitle += f" · {sum(1 for mod in mods if mod.enabled)} " + translate("MainWindow", "enabled")
+        self.pageTitle.setText(title)
+        self.pageSubtitle.setText(subtitle)
 
     def applyIcons(self) -> None:
         '''Line icons in the current theme's colours, with counts on Update and Health Check'''
@@ -1001,8 +1084,16 @@ class CustomMainWidget(QWidget):
         self.actionUpdateMods.setIconVisibleInMenu(False)
         self.actionHealthCheck.setIcon(badgedIcon("health", self.healthCount, statusColor("warning")))
         self.actionHealthCheck.setIconVisibleInMenu(False)
-        self.scriptMergerButton.setIcon(icon("merge"))
-        self.scriptMergerButton.setIconSize(QSize(16, 16))
+        for button, name in (
+            (self.checkButton, "check"),
+            (self.updateButton, "update"),
+            (self.addButton, "add"),
+            (self.scriptMergerButton, "merge"),
+        ):
+            button.setIcon(icon(name))
+            button.setIconSize(QSize(16, 16))
+        self.updateButton.setText(translate("MainWindow", "Update") + f" {self.updateCount}")
+        self.updateButtonAction.setVisible(self.updateCount > 0)
 
     def openMenu(self, position):
         '''Right click menu on mod list (Left panel)'''
@@ -1057,8 +1148,7 @@ class CustomMainWidget(QWidget):
         menu.addAction(self.actionAddToToolbar)
         rem = QMenu(menu)
         rem.setTitle(translate("MainWindow", "Remove.."))
-        actions = self.toolBar.actions()[self.builtInToolbarActions :]
-        for action in actions:
+        for action in list(self.customToolbarActions):
             temp = self.makeTempAction(action)
             rem.addAction(temp)
             del action
@@ -1068,6 +1158,8 @@ class CustomMainWidget(QWidget):
     def removeFromToolbar(self, action):
         '''Creates menu for removing actions from toolbar'''
         self.toolBar.removeAction(action)
+        if action in self.customToolbarActions:
+            self.customToolbarActions.remove(action)
         data.getConfig().removeOption("TOOLBAR", action.toolTip())
 
     def addToToolbar(self, selected=""):
@@ -1089,7 +1181,8 @@ class CustomMainWidget(QWidget):
                 actionTemp.setText(fl)
                 actionTemp.setIcon(icon)
                 actionTemp.setToolTip(selected)
-                self.toolBar.addAction(actionTemp)
+                self.toolBar.insertAction(self.checkButtonAction, actionTemp)
+                self.customToolbarActions.append(actionTemp)
                 data.getConfig().setOption("TOOLBAR", selected)
         except Exception as err:
             self.output(formatUserError(err))
@@ -1109,10 +1202,9 @@ class CustomMainWidget(QWidget):
             hsplit0 = data.getConfig().get("WINDOW", "hsplit0")
             hsplit1 = data.getConfig().get("WINDOW", "hsplit1")
             if hsplit0 and hsplit1:
-                self.horizontalSplitter_tree.setSizes([int(hsplit0), int(hsplit1)])
-            vsplit0 = data.getConfig().get("WINDOW", "vsplit0")
-            vsplit1 = data.getConfig().get("WINDOW", "vsplit1")
-            self.verticalSplitter_right.setSizes([int(vsplit0), int(vsplit1)] if vsplit0 and vsplit1 else [420, 260])
+                # the side panel's details need room for the picture
+                side = max(int(hsplit1), 380)
+                self.horizontalSplitter_tree.setSizes([max(int(hsplit0) + int(hsplit1) - side, 600), side])
         except Exception as e:
             print(f"couldn't restore split: {e}")
 
@@ -1592,7 +1684,12 @@ class CustomMainWidget(QWidget):
             + " "
             + translate("MainWindow", "from Nexus again...")
         )
-        self.runNexus(work, lambda results: self.reinstallDownloaded(local, results))
+        self.runNexus(
+            work,
+            lambda results: self.reinstallDownloaded(local, results),
+            download=", ".join(name for name, _ in wanted),
+            inBytes=False,
+        )
 
     def reinstallDownloaded(self, local: list, results: list) -> None:
         jobs = list(local)
@@ -1935,16 +2032,49 @@ class CustomMainWidget(QWidget):
             return True
         return False
 
-    def runNexus(self, work, done) -> None:
-        '''Runs work(progress) in the background and done(result) on the GUI thread'''
+    def runNexus(self, work, done, download: str = "", inBytes: bool = True) -> None:
+        '''Runs work(progress) in the background and done(result) on the GUI thread. A download names what it
+        fetches, to show it on the Downloads page while it runs.'''
         worker = NexusWorker(work, self)
         worker.progressed.connect(lambda current, total: self.setProgress(100 * current / total if total else 0))
         worker.succeeded.connect(done)
         worker.failed.connect(lambda message: self.output(message))
         worker.finished.connect(lambda: self.setProgress(0))
         worker.finished.connect(lambda: self.nexusFinished(worker))
+        if download:
+            transfer = Transfer(download, inBytes=inBytes)
+            self.activeTransfer = transfer
+            worker.progressed.connect(lambda current, total: self.transferProgressed(transfer, current, total))
+            worker.finished.connect(lambda: self.transferFinished(transfer))
         self.nexusWorker = worker
         worker.start()
+        self.showTransfers()
+
+    def transferProgressed(self, transfer: Transfer, done: int, total: int) -> None:
+        transfer.done, transfer.total = done, total
+        self.showTransfers()
+
+    def transferFinished(self, transfer: Transfer) -> None:
+        if self.activeTransfer is transfer:
+            self.activeTransfer = None
+        self.showTransfers()
+
+    def nexusLabel(self, modId: int) -> str:
+        '''A Nexus mod's name when its details are loaded, else its number'''
+        details = self.nexusDetails.get(modId)
+        return details.name if details and details.name else translate("MainWindow", "Nexus mod") + f" {modId}"
+
+    def showTransfers(self) -> None:
+        '''The running download and the queued Nexus links on the Downloads page, and their count on the rail'''
+        transfers = [self.activeTransfer] if self.activeTransfer is not None else []
+        for url in self.nxmQueue:
+            link = parseNxm(url)
+            if link is not None and link.game == GAME_DOMAIN:
+                transfers.append(Transfer(self.nexusLabel(link.modId), waiting=True))
+        self.downloads.setTransfers(transfers)
+        # while something downloads the rail counts that, otherwise the archives not installed
+        self.rail.setBadge("downloads", len(transfers) or self.notInstalledCount, statusColor("update"))
+        self.showPageTitle()
 
     def nexusFinished(self, worker: NexusWorker) -> None:
         '''Starts the next queued Nexus link once the previous request is done'''
@@ -2092,7 +2222,9 @@ class CustomMainWidget(QWidget):
                 return archive, str(error)
 
         self.output(translate("MainWindow", "Downloading Script Merger") + f" {file.version}...")
-        self.runNexus(work, lambda result: self.scriptMergerUpdated(file, result))
+        self.runNexus(
+            work, lambda result: self.scriptMergerUpdated(file, result), download=f"Script Merger {file.version}"
+        )
 
     def scriptMergerUpdated(self, file: NexusFile, result) -> None:
         modId = nexusId(data.getConfig().gameversion)
@@ -2231,7 +2363,7 @@ class CustomMainWidget(QWidget):
             + translate("MainWindow", "files to")
             + f" {archives}"
         )
-        self.runNexus(work, self.applyUpdates)
+        self.runNexus(work, self.applyUpdates, download=", ".join(name for name, _, _ in jobs))
 
     def backUpSaves(self, reason: str) -> SaveBackup | None:
         '''Copies the newest game saves to the backup folder. Raises OSError if that fails.'''
@@ -2778,6 +2910,8 @@ class CustomMainWidget(QWidget):
 
     def showLoadOrderPanel(self) -> None:
         """mods.settings holds what the load order panel shows, so the button goes there"""
+        self.showPage("mods")
+        self.showSideView("loadorder")
         self.loadOrder.setFocus()
         if self.loadOrder.topLevelItemCount() and self.loadOrder.currentItem() is None:
             self.loadOrder.setCurrentItem(self.loadOrder.topLevelItem(0))
@@ -2815,6 +2949,7 @@ class CustomMainWidget(QWidget):
         self.nxmQueue.append(url)
         self.raiseWindow()
         self.processNxmQueue()
+        self.showTransfers()
 
     def processNxmQueue(self) -> None:
         while self.nxmQueue and not (self.nexusWorker is not None and self.nexusWorker.isRunning()):
@@ -2861,7 +2996,7 @@ class CustomMainWidget(QWidget):
             return link, file, archive
 
         self.output(translate("MainWindow", "Downloading from Nexus..."))
-        self.runNexus(work, self.nxmDownloaded)
+        self.runNexus(work, self.nxmDownloaded, download=self.nexusLabel(link.modId))
 
     def installFromNexus(self, details) -> None:
         '''Downloads and installs a mod picked in the Browse Nexus tab, asking which file if there are several'''
@@ -2983,7 +3118,32 @@ class CustomMainWidget(QWidget):
         details = self.modDetails(mod) if mod is not None else None
         remastered = data.getConfig().gameversion == "re"
         sections = self.previewSections(mod, details) if mod is not None else None
-        self.preview.showMod(mod, details, self.nexusDetails.image(details), remastered, sections)
+        self.preview.showMod(mod, details, self.nexusDetails.bestImage(details), remastered, sections)
+        if mod is not None and self.sideStack.currentWidget() is self.loadOrder:
+            self.showModInLoadOrder()
+        if details is not None and details.pictureUrl and not self.nexusDetails.picture(details):
+            self.loadPicture(details)
+
+    def loadPicture(self, details: ModDetails) -> None:
+        '''Downloads the mod's full-size picture for the side panel (the thumbnail shows until then)'''
+        if self.pictureWorker is not None and self.pictureWorker.isRunning():
+            return
+        cache = self.nexusDetails
+        worker = NexusWorker(lambda progress: cache.downloadPicture(details.pictureUrl), self)
+        worker.succeeded.connect(lambda _: self.pictureLoaded(details))
+        worker.failed.connect(lambda message: print("could not download picture:", message))
+        self.pictureWorker = worker
+        worker.start()
+
+    def pictureLoaded(self, details: ModDetails) -> None:
+        '''Shows the picture if its mod is still selected, else fetches the selected mod's'''
+        selected = self.getSelectedMods()
+        mod = self.model.modList.get(selected[0]) if selected else None
+        current = self.modDetails(mod) if mod is not None else None
+        if current is not None and current.modId == details.modId:
+            self.updatePreview()
+        elif current is not None and current.pictureUrl and not self.nexusDetails.picture(current):
+            self.loadPicture(current)
 
     def previewSections(self, mod: Mod, details: ModDetails | None) -> PreviewSections:
         '''What the preview's Details, Files, Changelog and Requirements tabs show for an installed mod'''
@@ -2998,9 +3158,27 @@ class CustomMainWidget(QWidget):
             (translate("MainWindow", "Separator"), mod.group or none),
             (translate("MainWindow", "Contents"), contentsTags(mod).replace(" ", ", ") or none),
         ]
-        if mod.nexus and mod.nexus.modId:
+        linked = bool(mod.nexus and mod.nexus.modId)
+        if linked:
             facts.append((translate("MainWindow", "Nexus ID"), str(mod.nexus.modId)))
+        chips = [(self.modCategory(mod), "")]
+        version = mod.nexus.version if mod.nexus and mod.nexus.version else ""
+        if version:
+            chips.append((version if version[:1] in "vV" else "v" + version, ""))
+        if linked:
+            chips.append((f"Nexus {mod.nexus.modId}", ""))
+        if updateKind(self.updateChecks.get(mod.name)) == "update":
+            chips.append((translate("MainWindow", "Update available"), "update"))
+        chips.append(
+            (translate("MainWindow", "Enabled"), "ok")
+            if mod.enabled
+            else (translate("MainWindow", "Disabled"), "muted")
+        )
         return PreviewSections(
+            chips=[(text, kind) for text, kind in chips if text],
+            linked=linked,
+            endorsed=linked and self.endorsements.endorsed(mod.nexus.modId),
+            updateAvailable=updateKind(self.updateChecks.get(mod.name)) == "update",
             facts=[(label, value) for label, value in facts if value],
             files=self.filesHtml(mod),
             changelog=self.changelogHtml(mod),
@@ -3220,7 +3398,7 @@ class CustomMainWidget(QWidget):
         for archivePath, error in failed:
             self.output(f"  {path.basename(archivePath)}: {error}")
 
-    # The Not Installed tab
+    # The Downloads page
 
     def scanDownloads(self) -> tuple[str, list]:
         folder = data.getConfig().archives or ""
@@ -3233,9 +3411,10 @@ class CustomMainWidget(QWidget):
 
     def downloadsCounted(self, count: int) -> None:
         index = self.tabs.indexOf(self.downloads)
-        label = translate("MainWindow", "Not Installed")
+        label = translate("MainWindow", "Downloads")
         self.tabs.setTabText(index, f"{label} ({count})" if count else label)
-        self.rail.setBadge("downloads", count, statusColor("update"))
+        self.notInstalledCount = count
+        self.showTransfers()
 
     def downloadDetailsWanted(self, modIds: list[int]) -> None:
         '''Loads the Nexus names and pictures of downloaded mods, once a session for each'''
@@ -3293,6 +3472,11 @@ class CustomMainWidget(QWidget):
         if column == ENDORSE_COLUMN and not isGroupItem(item) and not isModioItem(item):
             self.toggleEndorsement(item.text(1))
 
+    def endorseSelected(self) -> None:
+        selected = self.getSelectedMods()
+        if selected:
+            self.toggleEndorsement(selected[0])
+
     def toggleEndorsement(self, name: str) -> None:
         """Endorses the mod on Nexus, or takes the endorsement back after asking"""
         mod = self.model.modList.get(name)
@@ -3325,6 +3509,7 @@ class CustomMainWidget(QWidget):
     def endorsementSent(self, name: str, modId: int, status: str) -> None:
         self.endorsements.set(modId, status)
         self.showEndorsements()
+        self.updatePreview()
         if status == ENDORSED:
             self.output(translate("MainWindow", "Endorsed") + f" {name}. " + translate("MainWindow", "Thank you!"))
         else:
@@ -3660,6 +3845,7 @@ class CustomMainWidget(QWidget):
         if modios:
             summary += f" · {len(modios)} " + translate("MainWindow", "from mod.io")
         self.summaryLabel.setText(summary)
+        self.showPageTitle()
         if updates != self.updateCount:
             self.updateCount = updates
             self.applyIcons()
@@ -4125,6 +4311,25 @@ class CustomMainWidget(QWidget):
             + translate("MainWindow", "its mods are now under Other mods")
         )
         self.saveGroups(order)
+
+    def showModInLoadOrder(self) -> None:
+        '''Selects the selected mods' folders in the load order and scrolls to the first'''
+        folders = set()
+        for name in self.getSelectedMods():
+            mod = self.model.modList.get(name)
+            if mod is not None:
+                folders.update(folder.lstrip("~").casefold() for folder in mod.files)
+        if not folders:
+            return
+        first = None
+        self.loadOrder.clearSelection()
+        for index in range(self.loadOrder.topLevelItemCount()):
+            item = self.loadOrder.topLevelItem(index)
+            if item.text(0).lstrip("~").casefold() in folders:
+                item.setSelected(True)
+                first = first or item
+        if first is not None:
+            self.loadOrder.scrollToItem(first)
 
     def getSelectedFiles(self):
         array = []
@@ -4807,6 +5012,13 @@ class CustomMainWidget(QWidget):
 
         self.scriptMergerButton.setText(translate("MainWindow", "Script Merger"))
         self.scriptMergerButton.setToolTip(translate("MainWindow", "Run Script Merger (Ctrl+S)"))
+        self.checkButton.setText(translate("MainWindow", "Check for Updates"))
+        self.checkButton.setToolTip(translate("MainWindow", "Check every mod with a Nexus ID for updates (F7)"))
+        self.updateButton.setToolTip(
+            translate("MainWindow", "Update the selected mods, or every mod with an update if none are selected")
+        )
+        self.addButton.setText(translate("MainWindow", "Add Mod"))
+        self.addButton.setToolTip(translate("MainWindow", "Install mods from archives or folders (Ctrl+E)"))
         launchLabel = self.gameLaunchLabel()
         self.runGameButton.setText(translate("MainWindow", "Play"))
         self.runGameButton.setMode(launchLabel)

@@ -5,16 +5,19 @@ import html
 import time
 from dataclasses import dataclass, field
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtGui import QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
+    QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
     QTabBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -22,9 +25,11 @@ from PySide6.QtWidgets import (
 from src.core.nexusdetails import ModDetails
 from src.domain.mod import Mod
 from src.globals.constants import translate
+from src.gui.skin import FlowLayout
 from src.gui.themes import statusColor
 
-IMAGE_HEIGHT = 130
+# the picture fills the panel's width at 16:9, up to this height
+IMAGE_HEIGHT = 230
 
 DETAILS_TAB, FILES_TAB, CHANGELOG_TAB, REQUIREMENTS_TAB = range(4)
 
@@ -33,6 +38,12 @@ DETAILS_TAB, FILES_TAB, CHANGELOG_TAB, REQUIREMENTS_TAB = range(4)
 class PreviewSections:
     '''What the tabs show for an installed mod; the texts are HTML'''
 
+    # small labels under the title: (text, kind) with kind "", "ok", "muted" or "update"
+    chips: list[tuple[str, str]] = field(default_factory=list)
+    # linked to Nexus (Open on Nexus and Endorse show), endorsed there, and whether an update is waiting
+    linked: bool = False
+    endorsed: bool = False
+    updateAvailable: bool = False
     facts: list[tuple[str, str]] = field(default_factory=list)
     files: str = ''
     changelog: str = ''
@@ -53,7 +64,12 @@ def factsHtml(facts: list[tuple[str, str]]) -> str:
 
 
 class ModPreview(QWidget):
+    '''The side panel's details: a large picture, the title and chips, buttons for the installed mod, then tabs'''
+
     changelogWanted = Signal()
+    nexusRequested = Signal()
+    endorseRequested = Signal()
+    updateRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -71,8 +87,8 @@ class ModPreview(QWidget):
         content = QWidget(self.scroll)
         self.scroll.setWidget(content)
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(6)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(8)
         self.image = QLabel(content)
         self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image.setMinimumHeight(0)
@@ -86,7 +102,29 @@ class ModPreview(QWidget):
         self.meta.setWordWrap(True)
         self.warning = QLabel(content)
         self.warning.setWordWrap(True)
-        for widget in (self.image, self.title, self.meta, self.warning):
+        self.chips = QWidget(content)
+        self.chipsLayout = FlowLayout(self.chips)
+        self.actions = QWidget(content)
+        actions = QHBoxLayout(self.actions)
+        actions.setContentsMargins(0, 2, 0, 2)
+        actions.setSpacing(6)
+        self.updateButton = QPushButton(translate("Preview", "Update"), self.actions)
+        self.updateButton.setObjectName("previewUpdate")
+        self.updateButton.clicked.connect(lambda: self.updateRequested.emit())
+        self.nexusButton = QPushButton(translate("Preview", "Open on Nexus"), self.actions)
+        self.nexusButton.clicked.connect(lambda: self.nexusRequested.emit())
+        self.endorseButton = QPushButton(translate("Preview", "Endorse"), self.actions)
+        self.endorseButton.clicked.connect(lambda: self.endorseRequested.emit())
+        self.moreButton = QToolButton(self.actions)
+        self.moreButton.setObjectName("previewMore")
+        self.moreButton.setText("\u22ef")
+        self.moreButton.setToolTip(translate("Preview", "More for this mod"))
+        self.moreButton.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.moreButton.setVisible(False)
+        for button in (self.updateButton, self.nexusButton, self.endorseButton, self.moreButton):
+            actions.addWidget(button)
+        actions.addStretch(1)
+        for widget in (self.image, self.title, self.meta, self.chips, self.warning, self.actions):
             layout.addWidget(widget)
 
         # Details, Files, Changelog, Requirements: only for installed mods
@@ -96,7 +134,7 @@ class ModPreview(QWidget):
         self.tabs.setDrawBase(False)
         self.tabs.setDocumentMode(True)
         for label in (
-            translate("Preview", "Details"),
+            translate("Preview", "Overview"),
             translate("Preview", "Files"),
             translate("Preview", "Changelog"),
             translate("Preview", "Requirements"),
@@ -201,8 +239,39 @@ class ModPreview(QWidget):
         )
         self.link.setText(self.anchor(mod.nexus.url) if mod.nexus and mod.nexus.modId else '')
 
+    def setMoreMenu(self, menu: QMenu) -> None:
+        '''The installed mod's other actions, behind the ... button'''
+        self.moreButton.setMenu(menu)
+        self.moreButton.setVisible(True)
+
+    def showChips(self, chips: list[tuple[str, str]]) -> None:
+        self.chipsLayout.clear()
+        for text, kind in chips:
+            chip = QLabel(text, self.chips)
+            chip.setProperty("chip", kind or True)
+            self.chipsLayout.addWidget(chip)
+        self.chips.setVisible(bool(chips))
+        self.chips.updateGeometry()
+
     def showSections(self, sections: PreviewSections | None) -> None:
         self.tabs.setVisible(sections is not None)
+        self.actions.setVisible(sections is not None)
+        self.warning.setVisible(bool(self.warning.text()))
+        # an installed, linked mod has the Open on Nexus button instead of the link
+        self.link.setVisible(sections is None or not sections.linked)
+        self.showChips(sections.chips if sections is not None else [])
+        if sections is not None:
+            self.updateButton.setVisible(sections.updateAvailable)
+            self.nexusButton.setVisible(sections.linked)
+            self.endorseButton.setVisible(sections.linked)
+            self.endorseButton.setText(
+                translate("Preview", "Endorsed") if sections.endorsed else translate("Preview", "Endorse")
+            )
+            self.endorseButton.setToolTip(
+                translate("Preview", "Click to take your endorsement back")
+                if sections.endorsed
+                else translate("Preview", "Endorse this mod on Nexus")
+            )
         if sections is None:
             self.tabs.setCurrentIndex(DETAILS_TAB)
             self.pages.setCurrentIndex(DETAILS_TAB)
@@ -240,6 +309,7 @@ class ModPreview(QWidget):
         self.warning.setStyleSheet(f"color: {statusColor('warning').name()};")  # follows theme changes
         if remastered and not details.updatedForRemastered:
             self.warning.setText(translate("Preview", "Not updated on Nexus since Remastered came out."))
+        self.warning.setVisible(bool(self.warning.text()))
 
     @staticmethod
     def anchor(url: str) -> str:
@@ -250,12 +320,34 @@ class ModPreview(QWidget):
             self.image.clear()
             self.image.setFixedHeight(0)
             return
-        width = max(50, self.scroll.viewport().width() - 20)
+        width = max(50, self.scroll.viewport().width() - 28)
+        height = min(IMAGE_HEIGHT, round(width * 9 / 16))
+        ratio = self.devicePixelRatioF()
+        # fill a 16:9 box (cropping the picture's edges if it's another shape) with rounded corners
         scaled = self.pixmap.scaled(
-            width, IMAGE_HEIGHT, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+            round(width * ratio),
+            round(height * ratio),
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
         )
-        self.image.setFixedHeight(scaled.height())
-        self.image.setPixmap(scaled)
+        cropped = scaled.copy(
+            (scaled.width() - round(width * ratio)) // 2,
+            (scaled.height() - round(height * ratio)) // 2,
+            round(width * ratio),
+            round(height * ratio),
+        )
+        rounded = QPixmap(cropped.size())
+        rounded.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(rounded)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        outline = QPainterPath()
+        outline.addRoundedRect(QRectF(rounded.rect()), 10 * ratio, 10 * ratio)
+        painter.setClipPath(outline)
+        painter.drawPixmap(0, 0, cropped)
+        painter.end()
+        rounded.setDevicePixelRatio(ratio)
+        self.image.setFixedHeight(height)
+        self.image.setPixmap(rounded)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
