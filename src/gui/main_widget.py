@@ -137,12 +137,13 @@ from src.gui.nexus_dialogs import (
     statusText,
 )
 from src.gui.requirements_dialog import RequirementsDialog
+from src.gui.reshade_dialog import ReShadeDialog
 from src.gui.saves_dialog import SaveBackupsDialog
 from src.gui.scriptmerger_dialog import OPEN_PAGE as SM_OPEN_PAGE
-from src.gui.reshade_dialog import ReShadeDialog
 from src.gui.scriptmerger_dialog import UPDATE as SM_UPDATE
 from src.gui.scriptmerger_dialog import MessageAlertScriptConflicts, ScriptConflictsDialog, askScriptMergerUpdate
 from src.gui.settings_dialog import KEYS_TAB, USER_TAB, GameSettingsDialog
+from src.gui.setup_dialog import SetupDialog
 from src.gui.themes import get_dark_palette, get_light_palette, get_system_palette, statusColor
 from src.gui.tree_widget import (
     GROUP_ROLE,
@@ -537,6 +538,7 @@ class CustomMainWidget(QWidget):
         self.actionHealthCheck.triggered.connect(self.showHealthCheck)
         self.actionGameSettings.triggered.connect(lambda: self.showGameSettings(USER_TAB))
         self.actionReShade.triggered.connect(self.showReShade)
+        self.actionSetup.triggered.connect(self.showSetup)
         self.actionSelect_All_Mods.triggered.connect(self.selectAllMods)
         self.actionEnableAll.triggered.connect(lambda: self.setVisibleModsEnabled(True))
         self.actionDisableAll.triggered.connect(lambda: self.setVisibleModsEnabled(False))
@@ -1739,10 +1741,7 @@ class CustomMainWidget(QWidget):
             )
             return
         if not installedVersion(data.getConfig().scriptmerger):
-            self.output(
-                translate("MainWindow", "Couldn't read the version of")
-                + f" {data.getConfig().scriptmerger}"
-            )
+            self.output(translate("MainWindow", "Couldn't read the version of") + f" {data.getConfig().scriptmerger}")
             return
         client = self.nexusClient()
         if client is None:
@@ -1824,9 +1823,7 @@ class CustomMainWidget(QWidget):
         modId = nexusId(data.getConfig().gameversion)
         if result is None:
             url = f"https://www.nexusmods.com/{GAME_DOMAIN}/mods/{modId}?tab=files&file_id={file.fileId}"
-            self.output(
-                translate("MainWindow", "Nexus only allows this download from its website:") + f" {url}"
-            )
+            self.output(translate("MainWindow", "Nexus only allows this download from its website:") + f" {url}")
             openUrl(url)
             return
         archive, outcome = result
@@ -2416,6 +2413,24 @@ class CustomMainWidget(QWidget):
             self.output(translate("MainWindow", "Set the game path first (Settings > Change Setting)."))
             return
         ReShadeDialog(self, config.game, config.backups, self.output).exec()
+
+    def showSetup(self) -> None:
+        config = data.getConfig()
+        before = (config.game, config.scriptmerger, config.archives, bool(config.nexusapikey))
+        if not SetupDialog(self, config).exec():
+            return
+        self.output(translate("MainWindow", "Setup saved."))
+        if config.game != before[0]:
+            self.refreshList()
+            self.translateUi()
+            self.configureToolbar()
+        if config.scriptmerger != before[1]:
+            self.output(translate("MainWindow", "Script Merger:") + f" {config.scriptmerger or '-'}")
+        if config.archives != before[2]:
+            self.output(translate("MainWindow", "Downloads go to") + f" {config.archives}")
+        if bool(config.nexusapikey) != before[3]:
+            self.refreshNexusDetails(silent=True, onlyMissing=True)
+            self.refreshEndorsements()
 
     def showLoadOrderPanel(self) -> None:
         """mods.settings holds what the load order panel shows, so the button goes there"""
@@ -3774,6 +3789,9 @@ class CustomMainWidget(QWidget):
         self.actionReShade = QAction(self.mainWindow)
         self.actionReShade.setObjectName("actionReShade")
 
+        self.actionSetup = QAction(self.mainWindow)
+        self.actionSetup.setObjectName("actionSetup")
+
         self.actionHealthCheck = QAction(self.mainWindow)
         self.actionHealthCheck.setObjectName("actionHealthCheck")
 
@@ -4063,6 +4081,8 @@ class CustomMainWidget(QWidget):
         self.menuConfigure_Settings.addAction(self.actionUseNativeFileDialogs)
 
         # Add submenus to Settings menu
+        self.menuSettings.addAction(self.actionSetup)
+        self.menuSettings.addSeparator()
         self.menuSettings.addAction(self.menuSelect_Theme.menuAction())
         self.menuSettings.addAction(self.menuSelect_Language.menuAction())
         self.menuSettings.addAction(self.menuConfigure_Settings.menuAction())
@@ -4151,6 +4171,10 @@ class CustomMainWidget(QWidget):
             translate("MainWindow", "The game's settings and key bindings, with what your mods added")
         )
         self.actionReShade.setText(translate("MainWindow", "ReShade..."))
+        self.actionSetup.setText(translate("MainWindow", "Setup..."))
+        self.actionSetup.setToolTip(
+            translate("MainWindow", "The game, Script Merger, the download folder and the Nexus API key")
+        )
         self.actionReShade.setToolTip(
             translate("MainWindow", "Whether ReShade is installed, turn it off and on, and update it from reshade.me")
         )

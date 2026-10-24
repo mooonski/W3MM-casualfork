@@ -187,7 +187,10 @@ if __name__ == "__main__":
         translateToChosenLanguage()
 
         if not Configuration.getCorrectGamePath(data.config.gameexe):
-            if not reconfigureGamePath():
+            # first run (or the game moved): the setup page finds the game and the tools in one go
+            from src.gui.setup_dialog import SetupDialog
+
+            if not SetupDialog(None, data.config, firstRun=True).exec():
                 sys.exit(1)
 
         try:

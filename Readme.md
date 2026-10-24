@@ -22,6 +22,10 @@ The fork uses the same configuration location as the upstream manager, so it pic
 
 The Nexus features need a Nexus Mods API key, set with **Nexus > Set API Key...**. Get your personal key from the bottom of the [API keys page](https://next.nexusmods.com/settings/api-keys) on Nexus. The key is stored encrypted with Windows DPAPI and is only sent to Nexus. Direct downloads need a Premium account; for other accounts, the download page opens in the browser.
 
+### Setup
+
+- A setup page on the first run, and under **Settings > Setup...** later: the game folder (found through Steam or GOG where possible), Script Merger (found next to the game or the download folder), the download folder and the Nexus API key, with a button that checks the key.
+
 ### Nexus Mods
 
 - **Check for Updates** marks every mod with a Nexus ID that has a newer file, and **Update** installs it in place of the old version. The update keeps the mod's priority, enabled state and separator, backs up the old version first, and records the exact Nexus file installed. **Restore Previous Version...** brings a backup back.
