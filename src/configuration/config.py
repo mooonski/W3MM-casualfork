@@ -518,6 +518,8 @@ class Configuration:
         except Exception as err:
             print('failed to save window state', err, file=sys.stderr)
         for i in range(0, ui.treeWidget.header().count() + 1):
+            if ui.treeWidget.header().isSectionHidden(i):
+                continue  # a hidden column measures 0; keep its width for when it is shown again
             self.set("WINDOW", "section" + str(i), str(ui.treeWidget.header().sectionSize(i)))
         for i in range(0, ui.loadOrder.header().count() + 1):
             self.set("WINDOW", "losection" + str(i), str(ui.loadOrder.header().sectionSize(i)))
@@ -547,6 +549,7 @@ class Configuration:
         self.set('WINDOW', 'section13', '90')
         self.set('WINDOW', 'section14', '110')
         self.set('WINDOW', 'section15', '34')
+        self.set('WINDOW', 'section16', '130')
 
     @staticmethod
     def getGameRoot(gamePath: str) -> str:

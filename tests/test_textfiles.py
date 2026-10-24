@@ -35,7 +35,9 @@ class OpenTextFileTests(unittest.TestCase):
         self.assertIn("openTextFile", line, "input.xml opens in Notepad")
         self.assertIn("self.showGameSettings(KEYS_TAB)", source)
         self.assertIn("self.showGameSettings(USER_TAB)", source)
-        self.assertIn("actionTemp.triggered.connect(self.showLoadOrderPanel)", source)
+        # the four config files are a menu on the toolbar's Config Files button
+        line = next(line for line in source.splitlines() if '"Mods Settings"' in line)
+        self.assertIn("self.showLoadOrderPanel", line)
 
 
 if __name__ == "__main__":

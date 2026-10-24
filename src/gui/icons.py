@@ -32,11 +32,13 @@ SHAPES = {
     '<circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
     'order': '<path d="M11 6h9M11 12h9M11 18h9M6 4v16M3.5 6.5 6 4l2.5 2.5M3.5 17.5 6 20l2.5-2.5"/>',
     'refresh': '<path d="M20 12a8 8 0 1 1-2.3-5.7L20 8.5"/><path d="M20 3.5v5h-5"/>',
-    'health':'<path d="M19 14c1.5-1.5 3-3.2 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.8 0-3 .5-4.5 2-1.5-1.5-2.7-2-4.5-2A5.5 5.5 0 0 0 '
+    'health': '<path d="M19 14c1.5-1.5 3-3.2 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.8 0-3 .5-4.5 2-1.5-1.5-2.7-2-4.5-2A5.5 5.5 0 0 0 '
     '2 8.5c0 2.3 1.5 4 3 5.5l7 7z"/><path d="M3.2 12h6.3l.5-1 2 4.5 2-7 1.5 3.5h5.3"/>',
     'history': '<path d="M3 12a9 9 0 1 0 9-9 9.8 9.8 0 0 0-6.7 2.7L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/>',
     'thumb': '<path d="M7 10v12"/>' + THUMB.format(fill='none'),
     'thumb-filled': THUMB.format(fill='currentColor'),
+    'play': '<path fill="currentColor" d="M7 4.5 19.5 12 7 19.5z"/>',
+    'search': '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
 }
 
 SIZES = (16, 20, 24, 32, 48)
@@ -76,4 +78,42 @@ def icon(name: str, palette: QPalette | None = None, color: QColor | None = None
     for size in SIZES:
         result.addPixmap(_pixmap(SHAPES[name], normal, size, ratio), QIcon.Mode.Normal)
         result.addPixmap(_pixmap(SHAPES[name], disabled, size, ratio), QIcon.Mode.Disabled)
+    return result
+
+
+def _badge(pixmap: QPixmap, count: int, fill: QColor) -> QPixmap:
+    '''The pixmap with a count in a small rounded box at its top right'''
+    ratio = pixmap.devicePixelRatio()
+    size = pixmap.width() / ratio
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    font = painter.font()
+    font.setPixelSize(max(7, round(size * 0.42)))
+    font.setBold(True)
+    painter.setFont(font)
+    text = str(count) if count < 100 else '99+'
+    height = size * 0.56
+    width = max(height, painter.fontMetrics().horizontalAdvance(text) + size * 0.2)
+    box = QRectF(size - width, 0, width, height)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(fill)
+    painter.drawRoundedRect(box, height / 3, height / 3)
+    painter.setPen(QColor(26, 18, 5) if fill.lightness() > 128 else QColor(Qt.GlobalColor.white))
+    painter.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
+    painter.end()
+    return pixmap
+
+
+def badgedIcon(name: str, count: int, fill: QColor, palette: QPalette | None = None) -> QIcon:
+    '''The named icon with a count at its corner, e.g. how many updates there are; the plain icon for 0'''
+    plain = icon(name, palette)
+    if count <= 0:
+        return plain
+    result = QIcon()
+    for size in SIZES:
+        for mode in (QIcon.Mode.Normal, QIcon.Mode.Disabled):
+            pixmap = plain.pixmap(size, size, mode)
+            if mode == QIcon.Mode.Normal:
+                pixmap = _badge(pixmap, count, fill)
+            result.addPixmap(pixmap, mode)
     return result

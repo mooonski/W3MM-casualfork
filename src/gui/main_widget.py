@@ -22,12 +22,14 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QAction, QActionGroup, QBrush, QCursor, QKeyEvent, QPalette, QResizeEvent
+from PySide6.QtGui import QAction, QActionGroup, QBrush, QCursor, QKeyEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QButtonGroup,
     QCheckBox,
     QFileDialog,
     QFileIconProvider,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -44,6 +46,7 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QTextEdit,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -134,7 +137,7 @@ from src.gui.details_dialog import DetailsDialog
 from src.gui.downloads_widget import DownloadsWidget
 from src.gui.health_dialog import HealthDialog
 from src.gui.history_dialog import DownloadHistoryDialog
-from src.gui.icons import icon
+from src.gui.icons import badgedIcon, icon
 from src.gui.load_order_tree import LoadOrderTree
 from src.gui.manager_update_dialog import INSTALL, OPEN_PAGE, ManagerUpdateDialog
 from src.gui.mod_preview import ModPreview
@@ -157,7 +160,8 @@ from src.gui.scriptmerger_dialog import UPDATE as SM_UPDATE
 from src.gui.scriptmerger_dialog import MessageAlertScriptConflicts, ScriptConflictsDialog, askScriptMergerUpdate
 from src.gui.settings_dialog import KEYS_TAB, USER_TAB, GameSettingsDialog
 from src.gui.setup_dialog import SetupDialog
-from src.gui.themes import get_dark_palette, get_light_palette, get_system_palette, statusColor
+from src.gui.skin import GROUP_COUNT_ROLE, UPDATE_KIND_ROLE, ModListDelegate, PlayButton
+from src.gui.themes import get_dark_palette, get_light_palette, get_system_palette, statusColor, styleSheet
 from src.gui.tree_widget import (
     GROUP_ROLE,
     MODIO_ROLE,
@@ -209,8 +213,39 @@ def priorityNumber(value) -> int | None:
         return None
 
 
-# the mod list's last column, with the endorse thumb
+# the mod list's column with the endorse thumb
 ENDORSE_COLUMN = 15
+UPDATE_COLUMN = 13
+# what a mod brings (DLC, menus, key bindings...) as small tags; added last, shown after the priority
+CONTENTS_COLUMN = 16
+# the separate counts that the Contents column sums up, hidden unless the user shows them again
+DETAIL_COLUMNS = (3, 4, 5, 6, 7, 8, 9)
+# the mod list's filter buttons
+LIST_FILTERS = ("all", "enabled", "disabled", "updates")
+
+
+def contentsTags(mod: Mod) -> str:
+    '''What a mod brings besides its mod folder, as space-separated tags for the Contents column'''
+    tags = []
+    if mod.dlcs:
+        tags.append("DLC")
+    if mod.menus or mod.xmlkeys or mod.hidden:
+        tags.append("Menu")
+    if mod.inputsettings:
+        tags.append("Keys")
+    if mod.usersettings:
+        tags.append("Ini")
+    if mod.bins:
+        tags.append("Bin")
+    return " ".join(tags)
+
+
+def updateKind(check: UpdateCheck | None) -> str:
+    '''How the Update column shows a check: "update", "error", "ok" or "" (not checked)'''
+    if check is None:
+        return ""
+    return {UPDATE_AVAILABLE: "update", FAILED: "error", UP_TO_DATE: "ok"}.get(check.state, "")
+
 
 # archives moved away by Clean Up Archives go to this folder inside the archive folder
 OLD_ARCHIVES = "Old archives"
@@ -236,6 +271,9 @@ class CustomMainWidget(QWidget):
         self.detailsWorker: NexusWorker | None = None
         self.requirementsWorker: NexusWorker | None = None
         self.loadOrderFocus = ""
+        # shown as counts on the Update and Health Check buttons
+        self.updateCount = 0
+        self.healthCount = 0
 
         self.modsSettingsWatcher = ModsSettingsWatcher()
         # connect to a method so the refresh always runs on the GUI thread
@@ -273,7 +311,11 @@ class CustomMainWidget(QWidget):
 
         QMetaObject.connectSlotsByName(self.mainWindow)
 
-        self.mainWindow.resizeEvent = lambda e: self.onResize()  # type: ignore
+        def windowResized(_event) -> None:
+            self.fitToolbar()
+            self.onResize()
+
+        self.mainWindow.resizeEvent = windowResized  # type: ignore
         self.loadOrder.header().sectionResized.connect(lambda: self.onResize())
         self.treeWidget.header().sectionResized.connect(lambda: self.onResize())
 
@@ -364,10 +406,36 @@ class CustomMainWidget(QWidget):
         self.forkLabel.setContentsMargins(0, 0, 10, 0)
         self.forkLabel.setStyleSheet(f"color: {statusColor('muted').name()};")
         self.menubar.setCornerWidget(self.forkLabel, Qt.Corner.TopRightCorner)
+        # the claw marks and the name, before the menus
+        self.brandLabel = QLabel(self.menubar)
+        self.brandLabel.setObjectName("brandLabel")
+        self.brandLabel.setPixmap(getIcon("w3mm-fork.ico").pixmap(18, 18))
+        self.brandLabel.setContentsMargins(10, 0, 6, 0)
+        self.brandLabel.setToolTip(TITLE)
+        self.menubar.setCornerWidget(self.brandLabel, Qt.Corner.TopLeftCorner)
 
         self.toolBar = QToolBar(self.mainWindow)
         self.toolBar.setObjectName("toolBar")
+        self.toolBar.setMovable(False)
         self.mainWindow.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.toolBar)
+
+        # Script Merger and Play at the right end of the toolbar row; the last toolbar in a row takes the space left
+        self.launchBar = QToolBar(self.mainWindow)
+        self.launchBar.setObjectName("launchBar")
+        self.launchBar.setMovable(False)
+        spacer = QWidget(self.launchBar)
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.launchBar.addWidget(spacer)
+        self.scriptMergerButton = QPushButton(self.launchBar)
+        self.scriptMergerButton.setObjectName("scriptMergerButton")
+        self.launchBar.addWidget(self.scriptMergerButton)
+        gap = QWidget(self.launchBar)
+        gap.setFixedWidth(8)
+        self.launchBar.addWidget(gap)
+        self.runGameButton = PlayButton(self.launchBar)
+        self.runGameButton.setObjectName("runGameButton")
+        self.launchBar.addWidget(self.runGameButton)
+        self.mainWindow.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.launchBar)
 
     def setupUI(self):
         '''Setup all UI components'''
@@ -376,19 +444,47 @@ class CustomMainWidget(QWidget):
         self.centralwidget.setObjectName("centralwidget")
         self.verticalLayout_2 = QVBoxLayout(self.centralwidget)
         self.verticalLayout_2.setObjectName("verticalLayout_2")
+        self.verticalLayout_2.setContentsMargins(0, 0, 0, 0)
+        self.verticalLayout_2.setSpacing(0)
+        # the tabs and the log, inset from the window's edges; the status row runs along the bottom edge
+        self.contentLayout = QVBoxLayout()
+        self.contentLayout.setContentsMargins(12, 10, 12, 10)
+        self.contentLayout.setSpacing(8)
+        self.verticalLayout_2.addLayout(self.contentLayout, 1)
 
         # Tabs: the installed mods, and browsing Nexus
         self.tabs = QTabWidget(self.centralwidget)
         self.tabs.setObjectName("tabs")
         self.installedTab = QWidget(self.tabs)
         self.installedLayout = QVBoxLayout(self.installedTab)
-        self.installedLayout.setContentsMargins(0, 4, 0, 0)
+        self.installedLayout.setContentsMargins(8, 8, 8, 8)
+        self.installedLayout.setSpacing(8)
 
-        # Search widget
+        # Search, and buttons that show all, enabled, disabled or updatable mods
+        self.filterRow = QHBoxLayout()
+        self.filterRow.setSpacing(6)
         self.searchWidget = QLineEdit(self.installedTab)
         self.searchWidget.setObjectName("searchWidget")
         self.searchWidget.setPlaceholderText(translate("MainWindow", "Search"))
-        self.installedLayout.addWidget(self.searchWidget)
+        self.searchWidget.setClearButtonEnabled(True)
+        self.searchAction = self.searchWidget.addAction(icon("search"), QLineEdit.ActionPosition.LeadingPosition)
+        self.filterRow.addWidget(self.searchWidget, 1)
+        self.listFilter = "all"
+        self.filterButtons: dict[str, QPushButton] = {}
+        self.filterGroup = QButtonGroup(self.installedTab)
+        self.filterGroup.setExclusive(True)
+        for name in LIST_FILTERS:
+            button = QPushButton(self.installedTab)
+            button.setObjectName(f"filter_{name}")
+            button.setProperty("chip", True)
+            button.setCheckable(True)
+            button.setChecked(name == "all")
+            button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+            button.clicked.connect(lambda _=False, n=name: self.setListFilter(n))
+            self.filterGroup.addButton(button)
+            self.filterButtons[name] = button
+            self.filterRow.addWidget(button)
+        self.installedLayout.addLayout(self.filterRow)
 
         # Setup tree widget
         self.setupTreeWidget()
@@ -409,20 +505,10 @@ class CustomMainWidget(QWidget):
         )
         self.browse.installRequested.connect(self.installFromNexus)
         self.tabs.addTab(self.browse, translate("MainWindow", "Browse Nexus"))
-        self.verticalLayout_2.addWidget(self.tabs)
+        self.contentLayout.addWidget(self.tabs, 1)
 
-        # Setup text output and buttons
+        # The log (shown on demand) and the status row under it
         self.setupOutputArea()
-
-        # Progress bar
-        self.progressBar = QProgressBar(self.centralwidget)
-        self.progressBar.setProperty("value", 0)
-        self.progressBar.setObjectName("progressBar")
-        self.verticalLayout_2.addWidget(self.progressBar)
-
-        # Stretch factors
-        self.verticalLayout_2.setStretch(0, 4)
-        self.verticalLayout_2.setStretch(1, 1)
 
         self.mainWindow.setCentralWidget(self.centralwidget)
 
@@ -434,16 +520,21 @@ class CustomMainWidget(QWidget):
         self.treeWidget.setUniformRowHeights(True)
         self.treeWidget.setAnimated(True)
         self.treeWidget.setHeaderHidden(False)
-        self.treeWidget.setColumnCount(8)
+        self.treeWidget.setColumnCount(CONTENTS_COLUMN + 1)
         self.treeWidget.setObjectName("treeWidget")
+        self.treeWidget.setItemDelegate(ModListDelegate(self.treeWidget, CONTENTS_COLUMN, UPDATE_COLUMN))
+        self.treeWidget.setAlternatingRowColors(True)
         self.treeWidget.header().setCascadingSectionResizes(True)
         self.treeWidget.header().setHighlightSections(False)
         self.treeWidget.header().setSortIndicatorShown(True)
+        self.treeWidget.header().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.treeWidget.header().customContextMenuRequested.connect(self.columnsMenu)
         self.treeWidget.setSortingEnabled(True)
 
         # Splitter for the tree and load order
         self.horizontalSplitter_tree = QSplitter()
         self.horizontalSplitter_tree.setObjectName("horizontalSplitter_tree")
+        self.horizontalSplitter_tree.setHandleWidth(10)
         self.horizontalSplitter_tree.addWidget(self.treeWidget)
 
         # Load order tree widget
@@ -461,6 +552,7 @@ class CustomMainWidget(QWidget):
         self.preview = ModPreview(self.centralwidget)
         self.verticalSplitter_right = QSplitter(Qt.Orientation.Vertical)
         self.verticalSplitter_right.setObjectName("verticalSplitter_right")
+        self.verticalSplitter_right.setHandleWidth(10)
         self.verticalSplitter_right.addWidget(self.preview)
         self.verticalSplitter_right.addWidget(self.loadOrder)
         self.verticalSplitter_right.setStretchFactor(0, 1)
@@ -473,53 +565,59 @@ class CustomMainWidget(QWidget):
         self.installedLayout.addWidget(self.horizontalSplitter_tree)
 
     def setupOutputArea(self):
-        '''Setup output text area and action buttons'''
-        self.horizontalLayout_2 = QHBoxLayout()
-        self.horizontalLayout_2.setObjectName("horizontalLayout_2")
-
-        # Output text widget
+        '''The log, which opens from the status row, and the status row: health, the latest message, progress'''
         self.textEdit = QTextEdit(self.centralwidget)
-        self.textEdit.setMaximumSize(QSize(16777215, 16777215))
         self.textEdit.setReadOnly(True)
         self.textEdit.setObjectName("textEdit")
-        self.horizontalLayout_2.addWidget(self.textEdit)
+        self.textEdit.setMinimumHeight(80)
+        self.textEdit.setMaximumHeight(180)
+        self.textEdit.setVisible(data.getConfig().get("WINDOW", "log") == "1")
+        self.contentLayout.addWidget(self.textEdit)
 
-        # Button layout
-        self.verticalLayout = QVBoxLayout()
-        self.verticalLayout.setObjectName("verticalLayout")
+        self.statusRow = QFrame(self.centralwidget)
+        self.statusRow.setObjectName("statusRow")
+        row = QHBoxLayout(self.statusRow)
+        row.setContentsMargins(10, 4, 8, 4)
+        row.setSpacing(12)
+        self.healthChip = QPushButton(self.statusRow)
+        self.healthChip.setObjectName("healthChip")
+        self.healthChip.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.healthChip.setVisible(False)
+        row.addWidget(self.healthChip)
+        self.statusLabel = QLabel(self.statusRow)
+        self.statusLabel.setObjectName("statusText")
+        self.statusLabel.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        row.addWidget(self.statusLabel, 1)
+        self.progressBar = QProgressBar(self.statusRow)
+        self.progressBar.setProperty("value", 0)
+        self.progressBar.setObjectName("progressBar")
+        self.progressBar.setTextVisible(False)
+        self.progressBar.setFixedSize(160, 6)
+        self.progressBar.setVisible(False)
+        row.addWidget(self.progressBar)
+        self.summaryLabel = QLabel(self.statusRow)
+        self.summaryLabel.setObjectName("summaryText")
+        row.addWidget(self.summaryLabel)
+        self.logButton = QPushButton(self.statusRow)
+        self.logButton.setObjectName("logToggle")
+        self.logButton.setCheckable(True)
+        self.logButton.setChecked(self.textEdit.isVisibleTo(self.centralwidget))
+        self.logButton.toggled.connect(self.showLog)
+        row.addWidget(self.logButton)
+        self.verticalLayout_2.addWidget(self.statusRow)
 
-        # Script merger button
-        self.scriptMergerButton = QPushButton(self.centralwidget)
-        sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        sizePolicy.setHorizontalStretch(0)
-        sizePolicy.setVerticalStretch(0)
-        sizePolicy.setHeightForWidth(self.scriptMergerButton.sizePolicy().hasHeightForWidth())
-        self.scriptMergerButton.setSizePolicy(sizePolicy)
-        self.scriptMergerButton.setMinimumSize(QSize(100, 50))
-        self.scriptMergerButton.setObjectName("scriptMergerButton")
-        self.verticalLayout.addWidget(self.scriptMergerButton)
-
-        # Run game button
-        self.runGameButton = QPushButton(self.centralwidget)
-        sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        sizePolicy.setHorizontalStretch(0)
-        sizePolicy.setVerticalStretch(0)
-        sizePolicy.setHeightForWidth(self.runGameButton.sizePolicy().hasHeightForWidth())
-        self.runGameButton.setSizePolicy(sizePolicy)
-        self.runGameButton.setMinimumSize(QSize(100, 50))
-        self.runGameButton.setObjectName("runGameButton")
-        self.verticalLayout.addWidget(self.runGameButton)
-
-        # Add button layout to horizontal layout
-        self.horizontalLayout_2.addLayout(self.verticalLayout)
-        self.horizontalLayout_2.setStretch(0, 3)
-        self.horizontalLayout_2.setStretch(1, 1)
-        self.verticalLayout_2.addLayout(self.horizontalLayout_2)
+    def showLog(self, shown: bool) -> None:
+        self.textEdit.setVisible(shown)
+        if shown:
+            self.textEdit.verticalScrollBar().setValue(self.textEdit.verticalScrollBar().maximum())
+        data.getConfig().set("WINDOW", "log", "1" if shown else "0")
 
     def configureUi(self):
         # the endorse column came later; give it a width instead of resetting the saved layout
         if not data.getConfig().getWindowSection(ENDORSE_COLUMN):
             data.getConfig().set("WINDOW", f"section{ENDORSE_COLUMN}", "34")
+        if not data.getConfig().getWindowSection(CONTENTS_COLUMN):
+            data.getConfig().set("WINDOW", f"section{CONTENTS_COLUMN}", "130")
         for i in range(self.treeWidget.header().count()):
             if not data.getConfig().getWindowSection(i):
                 data.getConfig().setDefaultWindow()
@@ -537,6 +635,12 @@ class CustomMainWidget(QWidget):
         self.loadOrder.header().setStretchLastSection(False)
         self.loadOrder.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.loadOrder.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+
+        # Contents comes after Priority, where the counts it sums up used to be
+        header = self.treeWidget.header()
+        header.moveSection(header.visualIndex(CONTENTS_COLUMN), header.visualIndex(2) + 1)
+        for column in self.hiddenColumns():
+            header.setSectionHidden(column, True)
 
         self.resizeColumns()
 
@@ -604,6 +708,7 @@ class CustomMainWidget(QWidget):
 
         self.scriptMergerButton.clicked.connect(self.runScriptMerger)
         self.runGameButton.clicked.connect(self.runTheGame)
+        self.healthChip.clicked.connect(self.showHealthCheck)
 
         self.treeWidget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.treeWidget.customContextMenuRequested.connect(self.openMenu)
@@ -631,98 +736,100 @@ class CustomMainWidget(QWidget):
 
         self.searchWidget.textChanged.connect(self.setSearchString)
 
+    def hiddenColumns(self) -> list[int]:
+        '''The mod list's hidden columns; the separate counts behind Contents unless the user chose otherwise'''
+        saved = data.getConfig().get("WINDOW", "hiddencolumns")
+        if saved is None:
+            return list(DETAIL_COLUMNS)
+        return [int(part) for part in saved.split(",") if part.strip().isdigit()]
+
+    def columnsMenu(self, position) -> None:
+        '''Right-click on the mod list's header: show or hide columns'''
+        header = self.treeWidget.header()
+        menu = QMenu(self.treeWidget)
+        for visual in range(header.count()):
+            column = header.logicalIndex(visual)
+            if column in (0, 1):
+                continue  # the tick and the name always show
+            label = self.treeWidget.headerItem().text(column) or translate("MainWindow", "Endorsed")
+            action = menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(not header.isSectionHidden(column))
+            action.toggled.connect(lambda shown, c=column: self.showColumn(c, shown))
+        menu.exec(header.mapToGlobal(position))
+
+    def showColumn(self, column: int, shown: bool) -> None:
+        header = self.treeWidget.header()
+        header.setSectionHidden(column, not shown)
+        if shown and header.sectionSize(column) < 20:
+            header.resizeSection(column, data.getConfig().getWindowSection(column) or 60)
+        hidden = [str(c) for c in range(header.count()) if header.isSectionHidden(c)]
+        data.getConfig().set("WINDOW", "hiddencolumns", ",".join(hidden))
+
+    def setListFilter(self, name: str) -> None:
+        self.listFilter = name
+        self.filterButtons[name].setChecked(True)
+        self.refreshList(False)
+
     def openByConfigKey(self, option):
         '''Open or run any kind of folder/file or executable by configuration key'''
         openFile(getattr(data.getConfig(), option))
 
     def configureToolbar(self):
-        '''Creates and configures toolbar'''
+        '''Creates and configures toolbar: mod actions, Nexus, checks, then folders and config files as menus'''
         self.toolBar.clear()
         self.applyIcons()
+        self.toolBar.setIconSize(QSize(20, 20))
 
         self.toolBar.addAction(self.actionInstall_Mods)
         self.toolBar.addAction(self.actionUninstall_Mods)
         self.toolBar.addAction(self.actionEnable_Disable_Mods)
+        self.toolBar.addSeparator()
         self.toolBar.addAction(self.actionCheckUpdates)
         self.toolBar.addAction(self.actionUpdateMods)
-        self.toolBar.addAction(self.actionRun_Script_Merger)
+        self.toolBar.addSeparator()
         self.toolBar.addAction(self.actionHealthCheck)
         self.toolBar.addAction(self.actionDownloadHistory)
-        self.toolBar.setIconSize(QSize(24, 24))
-        self.toolBar.addSeparator()
-
-        actionTemp = QAction(self.mainWindow)
-        actionTemp.triggered.connect(lambda: self.openByConfigKey("mods"))
-        actionTemp.setText("M")
-        actionTemp.setIconText(translate("MainWindow", "Mods"))
-        actionTemp.setIcon(icon("mods"))
-        actionTemp.setToolTip(translate("MainWindow", "Open Mods folder"))
-        self.toolBar.addAction(actionTemp)
-
-        actionTemp = QAction(self.mainWindow)
-        actionTemp.triggered.connect(lambda: self.openByConfigKey("dlc"))
-        actionTemp.setText("D")
-        actionTemp.setIconText(translate("MainWindow", "DLC"))
-        actionTemp.setIcon(icon("dlc"))
-        actionTemp.setToolTip(translate("MainWindow", "Open DLC folder"))
-        self.toolBar.addAction(actionTemp)
-
-        actionTemp = QAction(self.mainWindow)
-        actionTemp.triggered.connect(lambda: self.openByConfigKey("menu"))
-        actionTemp.setText("I")
-        actionTemp.setIconText(translate("MainWindow", "Menus"))
-        actionTemp.setIcon(icon("menus"))
-        actionTemp.setToolTip(translate("MainWindow", "Open Menus folder"))
-        self.toolBar.addAction(actionTemp)
-
-        actionTemp = QAction(self.mainWindow)
-        actionTemp.triggered.connect(lambda: self.openByConfigKey("settings"))
-        actionTemp.setText("S")
-        actionTemp.setIconText(translate("MainWindow", "Settings"))
-        actionTemp.setIcon(icon("folder"))
-        actionTemp.setToolTip(translate("MainWindow", "Open Settings folder"))
-        self.toolBar.addAction(actionTemp)
-
-        self.toolBar.addSeparator()
-
-        actionTemp = QAction(self.mainWindow)
-        actionTemp.triggered.connect(lambda: openTextFile(data.getConfig().menu + "/input.xml"))
-        actionTemp.setText(translate("MainWindow", "Input Xml"))
-        actionTemp.setIcon(icon("xml"))
-        actionTemp.setToolTip(translate("MainWindow", "Open input.xml file"))
-        self.toolBar.addAction(actionTemp)
-
-        actionTemp = QAction(self.mainWindow)
-        actionTemp.triggered.connect(lambda: self.showGameSettings(KEYS_TAB))
-        actionTemp.setText(translate("MainWindow", "Input Settings"))
-        actionTemp.setIcon(icon("keyboard"))
-        actionTemp.setToolTip(
-            translate("MainWindow", "Your key bindings (input.settings), with the ones from your mods")
-        )
-        self.toolBar.addAction(actionTemp)
-
-        actionTemp = QAction(self.mainWindow)
-        actionTemp.triggered.connect(lambda: self.showGameSettings(USER_TAB))
-        actionTemp.setText(translate("MainWindow", "User Settings"))
-        actionTemp.setIcon(icon("sliders"))
-        actionTemp.setToolTip(
-            translate("MainWindow", "The game's settings (user.settings), including your mods' options")
-        )
-        self.toolBar.addAction(actionTemp)
-
-        actionTemp = QAction(self.mainWindow)
-        actionTemp.triggered.connect(self.showLoadOrderPanel)
-        actionTemp.setText(translate("MainWindow", "Mods Settings"))
-        actionTemp.setIcon(icon("order"))
-        actionTemp.setToolTip(
-            translate("MainWindow", "The load order (mods.settings) is the list on the right; drag mods to change it")
-        )
-        self.toolBar.addAction(actionTemp)
-
         self.actionRefresh_Mod_List.setToolTip(
             translate("MainWindow", "Read mods.settings and the mods again, e.g. after editing them outside (F5)")
         )
         self.toolBar.addAction(self.actionRefresh_Mod_List)
+        self.toolBar.addSeparator()
+
+        folders = QMenu(self.mainWindow)
+        for key, label, name in (
+            ("mods", translate("MainWindow", "Mods"), "mods"),
+            ("dlc", translate("MainWindow", "DLC"), "dlc"),
+            ("menu", translate("MainWindow", "Menus"), "menus"),
+            ("settings", translate("MainWindow", "Settings"), "folder"),
+        ):
+            folders.addAction(icon(name), label, lambda k=key: self.openByConfigKey(k))
+        self.actionFolders = self.dropDownAction(
+            folders, translate("MainWindow", "Folders"), "folder", translate("MainWindow", "Open a game folder")
+        )
+
+        configs = QMenu(self.mainWindow)
+        configs.setToolTipsVisible(True)
+        configs.addAction(
+            icon("xml"),
+            translate("MainWindow", "Input Xml"),
+            lambda: openTextFile(data.getConfig().menu + "/input.xml"),
+        ).setToolTip(translate("MainWindow", "Open input.xml file"))
+        configs.addAction(
+            icon("keyboard"), translate("MainWindow", "Input Settings"), lambda: self.showGameSettings(KEYS_TAB)
+        ).setToolTip(translate("MainWindow", "Your key bindings (input.settings), with the ones from your mods"))
+        configs.addAction(
+            icon("sliders"), translate("MainWindow", "User Settings"), lambda: self.showGameSettings(USER_TAB)
+        ).setToolTip(translate("MainWindow", "The game's settings (user.settings), including your mods' options"))
+        configs.addAction(icon("order"), translate("MainWindow", "Mods Settings"), self.showLoadOrderPanel).setToolTip(
+            translate("MainWindow", "The load order (mods.settings) is the list on the right; drag mods to change it")
+        )
+        self.actionConfigFiles = self.dropDownAction(
+            configs,
+            translate("MainWindow", "Config Files"),
+            "sliders",
+            translate("MainWindow", "The game's input and settings files"),
+        )
 
         self.toolBar.addSeparator()
 
@@ -732,22 +839,61 @@ class CustomMainWidget(QWidget):
         self.actionAddToToolbar = QAction(self.mainWindow)
         self.actionAddToToolbar.triggered.connect(self.addToToolbar)
         self.actionAddToToolbar.setText(translate("MainWindow", "Add New.."))
+        self.measureToolbar()
+
+    def measureToolbar(self) -> None:
+        '''How wide the toolbar is with its labels, to drop them when the window is too narrow (see fitToolbar)'''
+        self.toolBar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.labelledToolbarWidth = self.toolBar.sizeHint().width()
+        self.fitToolbar()
+
+    def fitToolbar(self) -> None:
+        '''Icons only on the toolbar when its labels would push Script Merger and Play off the window'''
+        room = self.mainWindow.width() - self.launchBar.sizeHint().width() - 16
+        style = Qt.ToolButtonStyle.ToolButtonTextUnderIcon
+        if self.labelledToolbarWidth > room:
+            style = Qt.ToolButtonStyle.ToolButtonIconOnly
+        if self.toolBar.toolButtonStyle() != style:
+            self.toolBar.setToolButtonStyle(style)
+            # the toolbar sets every button's style; the menu buttons keep their labels
+            for action in (self.actionFolders, self.actionConfigFiles):
+                button = self.toolBar.widgetForAction(action)
+                if isinstance(button, QToolButton):
+                    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+
+    def dropDownAction(self, menu: QMenu, label: str, iconName: str, tip: str) -> QAction:
+        '''A toolbar button that opens a menu, with its label beside the icon'''
+        action = QAction(icon(iconName), label, self.mainWindow)
+        action.setToolTip(tip)
+        action.setMenu(menu)
+        self.toolBar.addAction(action)
+        button = self.toolBar.widgetForAction(action)
+        if isinstance(button, QToolButton):
+            button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            button.setIconSize(QSize(16, 16))
+            button.setText(label + "  ▾")
+        return action
 
     def applyIcons(self) -> None:
-        '''Line icons in the current theme's colours'''
+        '''Line icons in the current theme's colours, with counts on Update and Health Check'''
         for action, name in (
             (self.actionInstall_Mods, "add"),
             (self.actionUninstall_Mods, "remove"),
             (self.actionEnable_Disable_Mods, "toggle"),
             (self.actionCheckUpdates, "check"),
-            (self.actionUpdateMods, "update"),
             (self.actionRun_Script_Merger, "merge"),
-            (self.actionHealthCheck, "health"),
             (self.actionDownloadHistory, "history"),
             (self.actionRefresh_Mod_List, "refresh"),
         ):
             action.setIcon(icon(name))
             action.setIconVisibleInMenu(False)
+        self.actionUpdateMods.setIcon(badgedIcon("update", self.updateCount, statusColor("update")))
+        self.actionUpdateMods.setIconVisibleInMenu(False)
+        self.actionHealthCheck.setIcon(badgedIcon("health", self.healthCount, statusColor("warning")))
+        self.actionHealthCheck.setIconVisibleInMenu(False)
+        self.scriptMergerButton.setIcon(icon("merge"))
+        self.scriptMergerButton.setIconSize(QSize(16, 16))
 
     def openMenu(self, position):
         '''Right click menu on mod list (Left panel)'''
@@ -862,8 +1008,12 @@ class CustomMainWidget(QWidget):
             print(f"couldn't restore split: {e}")
 
     def output(self, appendation):
-        '''Prints appendation to the output text field'''
+        '''Prints appendation to the output text field, and its last line in the status row'''
         self.textEdit.append(appendation)
+        lines = [line.strip() for line in str(appendation).splitlines() if line.strip()]
+        if lines:
+            self.statusLabel.setText(lines[-1])
+            self.statusLabel.setToolTip(str(appendation))
 
     def clear(self):
         '''Removes all text from output text field'''
@@ -2844,7 +2994,7 @@ class CustomMainWidget(QWidget):
         if not (mod.nexus and mod.nexus.modId):
             return
         if self.endorsements.endorsed(mod.nexus.modId):
-            item.setIcon(ENDORSE_COLUMN, icon("thumb-filled", color=self.palette().color(QPalette.ColorRole.Text)))
+            item.setIcon(ENDORSE_COLUMN, icon("thumb-filled", color=statusColor("accent")))
             item.setToolTip(ENDORSE_COLUMN, translate("MainWindow", "You endorsed this mod. Click to take it back."))
         else:
             item.setIcon(ENDORSE_COLUMN, icon("thumb", color=statusColor("muted")))
@@ -3146,6 +3296,8 @@ class CustomMainWidget(QWidget):
                 if len(self.searchString) > 0:
                     if self.searchString.lower() not in mod.name.lower():
                         continue
+                if not self.passesFilter(mod.enabled, self.updateChecks.get(mod.name)):
+                    continue
                 moddata += mod.files
                 modsize = 0
                 for modfile in mod.files:
@@ -3180,7 +3332,9 @@ class CustomMainWidget(QWidget):
                     statusText(self.updateChecks.get(mod.name)),
                     self.modCategory(mod),
                     parent=headers.get(mod.group if mod.group in headers else ""),
+                    contents=contentsTags(mod),
                 )
+                row.setData(UPDATE_COLUMN, UPDATE_KIND_ROLE, updateKind(self.updateChecks.get(mod.name)))
                 self.showEndorsement(row, mod)
                 if mod.name in duplicates:
                     row.setForeground(1, QBrush(statusColor("warning")))
@@ -3192,6 +3346,7 @@ class CustomMainWidget(QWidget):
                     )
             self.addModioRows(headers.get(""))
             self.finishGroupHeaders(headers)
+            self.showCounts()
             for item in selected:
                 rows = self.treeWidget.findItems(item, Qt.MatchFlag.MatchEndsWith | Qt.MatchFlag.MatchRecursive, 1)
                 if rows:
@@ -3205,6 +3360,45 @@ class CustomMainWidget(QWidget):
             self.output(translate("MainWindow", "Couldn't refresh list: ") + f"{formatUserError(err)}")
             return err
         return None
+
+    def passesFilter(self, enabled: bool, check: UpdateCheck | None) -> bool:
+        '''Whether a mod shows under the chosen filter button (All, Enabled, Disabled or Updates)'''
+        wanted = getattr(self, "listFilter", "all")
+        if wanted == "enabled":
+            return bool(enabled)
+        if wanted == "disabled":
+            return not enabled
+        if wanted == "updates":
+            return updateKind(check) == "update"
+        return True
+
+    def showCounts(self) -> None:
+        '''Counts on the filter buttons, the Installed tab, the Update button and the status row'''
+        mods = self.model.all()
+        try:
+            modios = installedModioMods(data.getConfig().settings)
+        except Exception:
+            modios = []
+        enabled = sum(1 for mod in mods if mod.enabled) + sum(1 for modio in modios if modio.enabled)
+        everything = len(mods) + len(modios)
+        updates = sum(1 for mod in mods if updateKind(self.updateChecks.get(mod.name)) == "update")
+        for name, label, count in (
+            ("all", translate("MainWindow", "All"), everything),
+            ("enabled", translate("MainWindow", "Enabled"), enabled),
+            ("disabled", translate("MainWindow", "Disabled"), everything - enabled),
+            ("updates", translate("MainWindow", "Updates"), updates),
+        ):
+            self.filterButtons[name].setText(f"{label}  {count}")
+        index = self.tabs.indexOf(self.installedTab)
+        self.tabs.setTabText(index, translate("MainWindow", "Installed") + f" ({len(mods)})")
+        summary = plural(len(mods), translate("MainWindow", "mod")) + " · "
+        summary += str(sum(1 for mod in mods if mod.enabled)) + " " + translate("MainWindow", "enabled")
+        if modios:
+            summary += f" · {len(modios)} " + translate("MainWindow", "from mod.io")
+        self.summaryLabel.setText(summary)
+        if updates != self.updateCount:
+            self.updateCount = updates
+            self.applyIcons()
 
     @debounceGui(100)
     def refreshLoadOrder(self):
@@ -3294,6 +3488,7 @@ class CustomMainWidget(QWidget):
     def setProgress(self, currentProgress):
         '''Sets the progress to currentProgress'''
         self.progressBar.setProperty("value", currentProgress)
+        self.progressBar.setVisible(0 < currentProgress < 100)
 
     def addToList(
         self,
@@ -3313,6 +3508,7 @@ class CustomMainWidget(QWidget):
         update="",
         category="",
         parent=None,
+        contents="",
     ):
         '''Adds mod data to the list, under the given group heading if there is one'''
         if data_ == 0:
@@ -3362,6 +3558,7 @@ class CustomMainWidget(QWidget):
             str(update),
             str(category),
             "",
+            str(contents),
         ]
         item = CustomTreeWidgetItem(proplist)
         item.setTextAlignment(12, Qt.AlignmentFlag.AlignCenter)
@@ -3374,13 +3571,17 @@ class CustomMainWidget(QWidget):
         item.setTextAlignment(7, Qt.AlignmentFlag.AlignCenter)
         item.setTextAlignment(8, Qt.AlignmentFlag.AlignCenter)
         item.setTextAlignment(9, Qt.AlignmentFlag.AlignCenter)
-        item.setTextAlignment(10, Qt.AlignmentFlag.AlignRight)
+        item.setTextAlignment(10, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         item.setTextAlignment(11, Qt.AlignmentFlag.AlignCenter)
         if "~" not in name:
             if on:
                 item.setCheckState(0, Qt.CheckState.Checked)
             else:
                 item.setCheckState(0, Qt.CheckState.Unchecked)
+        if not on:
+            muted = QBrush(statusColor("muted"))
+            for column in range(1, ENDORSE_COLUMN):
+                item.setForeground(column, muted)
         if parent is not None:
             parent.addChild(item)
         else:
@@ -3402,6 +3603,8 @@ class CustomMainWidget(QWidget):
     def addModioRows(self, parent) -> None:
         for modio in installedModioMods(data.getConfig().settings):
             if self.searchString and self.searchString.lower() not in modio.label.lower():
+                continue
+            if not self.passesFilter(modio.enabled, None):
                 continue
             row = self.addToList(
                 modio.enabled,
@@ -3492,9 +3695,10 @@ class CustomMainWidget(QWidget):
                 count = header.childCount()
                 label = name or translate("MainWindow", "Other mods")
                 header.setText(0, f"{label}  ({count})")
+                header.setData(0, GROUP_COUNT_ROLE, count)
                 header.setToolTip(0, translate("MainWindow", "Right-click to rename, move or remove the separator"))
                 # an empty group stays visible so mods can be put in it, unless a search is hiding things
-                header.setHidden(count == 0 and (not name or bool(self.searchString)))
+                header.setHidden(count == 0 and (not name or bool(self.searchString) or self.listFilter != "all"))
                 header.setExpanded(name not in collapsed)
         finally:
             self.treeWidget.blockSignals(False)
@@ -3764,6 +3968,21 @@ class CustomMainWidget(QWidget):
 
     def showHealthCheck(self) -> None:
         HealthDialog(self, self.healthIssues(), self.healthIssues, fixed=self.showPriorities).exec()
+        self.showHealth([issue for issue in self.healthIssues() if issue.severity in (ERROR, WARNING)])
+
+    def showHealth(self, issues: list) -> None:
+        '''The number of problems and warnings on the Health Check button and in the status row'''
+        self.healthCount = len(issues)
+        self.healthChip.setText(
+            plural(
+                len(issues),
+                translate("MainWindow", "problem or warning"),
+                translate("MainWindow", "problems or warnings"),
+            )
+        )
+        self.healthChip.setToolTip(translate("MainWindow", "Open the health check (F9)"))
+        self.healthChip.setVisible(bool(issues))
+        self.applyIcons()
 
     def modVersions(self) -> dict[str, tuple[int, str]]:
         '''Which entry and install time each mod has, to tell afterwards which ones were installed'''
@@ -3796,6 +4015,7 @@ class CustomMainWidget(QWidget):
     def reportHealth(self) -> None:
         '''Mentions problems at startup, without opening anything'''
         issues = [issue for issue in self.healthIssues() if issue.severity in (ERROR, WARNING)]
+        self.showHealth(issues)
         if issues:
             self.output(
                 translate("MainWindow", "Health check:")
@@ -3816,9 +4036,11 @@ class CustomMainWidget(QWidget):
             data.getApp().setPalette(get_light_palette())
         else:
             data.getApp().setPalette(get_system_palette())
+        data.getApp().setStyleSheet(styleSheet(theme))
         data.getConfig().write_config()
         # icons and status colours are drawn in the theme's colours, so draw them again
         self.configureToolbar()
+        self.searchAction.setIcon(icon("search"))
         self.forkLabel.setStyleSheet(f"color: {statusColor('muted').name()};")
         self.refreshList()
 
@@ -4194,6 +4416,13 @@ class CustomMainWidget(QWidget):
         self.treeWidget.headerItem().setText(12, translate("MainWindow", "Version"))
         self.treeWidget.headerItem().setText(13, translate("MainWindow", "Update"))
         self.treeWidget.headerItem().setText(14, translate("MainWindow", "Category"))
+        self.treeWidget.headerItem().setText(CONTENTS_COLUMN, translate("MainWindow", "Contents"))
+        self.treeWidget.headerItem().setToolTip(
+            CONTENTS_COLUMN,
+            translate(
+                "MainWindow", "What the mod adds besides its mod folder: DLC, menus, key bindings, settings, bin files"
+            ),
+        )
         self.treeWidget.headerItem().setText(ENDORSE_COLUMN, "")
         self.treeWidget.headerItem().setIcon(ENDORSE_COLUMN, icon("thumb"))
         self.treeWidget.headerItem().setToolTip(
@@ -4214,9 +4443,15 @@ class CustomMainWidget(QWidget):
         self.textEdit.setPlaceholderText(translate("MainWindow", "Output"))
         self.textEdit.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
 
-        self.scriptMergerButton.setText(translate("MainWindow", "Run Script Merger"))
+        self.scriptMergerButton.setText(translate("MainWindow", "Script Merger"))
+        self.scriptMergerButton.setToolTip(translate("MainWindow", "Run Script Merger (Ctrl+S)"))
         launchLabel = self.gameLaunchLabel()
-        self.runGameButton.setText(translate("MainWindow", "Run the Game") + " (" + launchLabel + ")")
+        self.runGameButton.setText(translate("MainWindow", "Play"))
+        self.runGameButton.setMode(launchLabel)
+        self.runGameButton.setToolTip(translate("MainWindow", "Run the Game") + f" ({launchLabel}, Ctrl+R)")
+        self.searchWidget.setPlaceholderText(translate("MainWindow", "Search mods"))
+        self.logButton.setText(translate("MainWindow", "Log"))
+        self.logButton.setToolTip(translate("MainWindow", "Show or hide everything the manager has reported"))
         self.toolBar.setWindowTitle(translate("MainWindow", "toolBar"))
 
         self.actionInstall_Mods.setText(translate("MainWindow", "Install Mods"))

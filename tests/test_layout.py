@@ -185,37 +185,62 @@ class MainWindowLayoutTests(LayoutTestCase):
         self.assertEqual(tabs, ["Installed", "Not Installed", "Browse Nexus"])
         actions = widget.toolBar.actions()
         first = actions.index(widget.actionCheckUpdates)
-        self.assertEqual(
-            actions[first : first + 3],
-            [widget.actionCheckUpdates, widget.actionUpdateMods, widget.actionRun_Script_Merger],
-        )
-        self.assertEqual(
-            [actions[i].iconText() for i in range(first, first + 3)], ["Check for Updates", "Update", "Script Merger"]
-        )
-        self.assertEqual(widget.toolBar.iconSize().width(), 24)
+        self.assertEqual(actions[first : first + 2], [widget.actionCheckUpdates, widget.actionUpdateMods])
+        self.assertEqual([actions[i].iconText() for i in range(first, first + 2)], ["Check for Updates", "Update"])
+        self.assertEqual(widget.toolBar.iconSize().width(), 20)
         self.assertFalse(widget.actionUpdateMods.icon().isNull())
-        self.assertEqual(widget.actionRun_Script_Merger.iconText(), "Script Merger")
         self.assertIn("(casual fork 0.2, source)", window.windowTitle())
         self.assertIs(widget.menubar.cornerWidget(Qt.Corner.TopRightCorner), widget.forkLabel)
         self.assertTrue(widget.forkLabel.isVisible())
         self.assertInside(widget.forkLabel, window)
         labels = [widget.treeWidget.headerItem().text(i) for i in range(widget.treeWidget.columnCount())]
-        self.assertEqual(len(labels), 16)
+        self.assertEqual(len(labels), 17)
         self.assertTrue(all(labels[1:15]), labels)
-        self.assertEqual(labels[12:], ["Version", "Update", "Category", ""])
+        self.assertEqual(labels[12:], ["Version", "Update", "Category", "", "Contents"])
         self.assertFalse(widget.treeWidget.headerItem().icon(15).isNull(), "the endorse column shows a thumb")
         self.assertGreaterEqual(widget.treeWidget.header().sectionSize(15), 24)
+        header = widget.treeWidget.header()
+        self.assertEqual(header.visualIndex(16), header.visualIndex(2) + 1, "Contents comes after Priority")
+        self.assertEqual([c for c in range(17) if header.isSectionHidden(c)], [3, 4, 5, 6, 7, 8, 9])
         toolbar = [action.iconText() for action in widget.toolBar.actions()]
         self.assertIn("Health Check", toolbar)
         self.assertIn("History", toolbar)
+        self.assertIn("Folders", toolbar)
+        self.assertIn("Config Files", toolbar)
+
+        # Script Merger and Play sit together at the right end of the toolbar row
+        self.assertNoOverlap([widget.scriptMergerButton, widget.runGameButton], window)
+        self.assertLess(rectIn(widget.scriptMergerButton, window).right(), rectIn(widget.runGameButton, window).left())
+        self.assertGreater(rectIn(widget.runGameButton, window).right(), window.width() - 40)
+        self.assertEqual(widget.runGameButton.text(), "Play")
+        self.assertGreaterEqual(widget.runGameButton.width(), widget.runGameButton.sizeHint().width())
+
+        # search, then the filter buttons
+        self.assertEqual(
+            [widget.filterButtons[name].text().split()[0] for name in ("all", "enabled", "disabled", "updates")],
+            ["All", "Enabled", "Disabled", "Updates"],
+        )
+        self.assertTrue(widget.filterButtons["all"].isChecked())
+        buttons = [widget.searchWidget] + list(widget.filterButtons.values())
+        self.assertNoOverlap(buttons, window)
+        for button in buttons:
+            self.assertInside(button, window)
 
         right = widget.verticalSplitter_right
         self.assertLess(rectIn(widget.preview, right).bottom(), rectIn(widget.loadOrder, right).top())
         self.assertGreaterEqual(widget.preview.height(), 150, "the preview needs room for its picture")
         self.assertGreaterEqual(widget.loadOrder.height(), 100, "the load order needs room too")
         self.assertNoOverlap([widget.treeWidget, right], widget.horizontalSplitter_tree)
-        self.assertNoOverlap([widget.scriptMergerButton, widget.runGameButton], window)
-        for part in (widget.tabs, widget.textEdit, widget.progressBar, widget.runGameButton):
+
+        # the log is closed until asked for; the status row runs along the bottom
+        self.assertFalse(widget.textEdit.isVisible())
+        self.assertEqual(rectIn(widget.statusRow, window).bottom(), window.height() - 1)
+        self.assertLess(rectIn(widget.tabs, window).bottom(), rectIn(widget.statusRow, window).top())
+        widget.logButton.setChecked(True)
+        settle(self.app)
+        self.assertTrue(widget.textEdit.isVisible())
+        self.assertNoOverlap([widget.tabs, widget.textEdit, widget.statusRow], window)
+        for part in (widget.tabs, widget.textEdit, widget.statusRow, widget.runGameButton, widget.logButton):
             self.assertInside(part, window)
 
 

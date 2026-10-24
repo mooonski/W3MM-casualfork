@@ -87,7 +87,7 @@ if __name__ == "__main__":
         from src.gui.alerts import *
         from src.gui.main_widget import CustomMainWidget
         from src.gui.main_window import CustomMainWindow
-        from src.gui.themes import ManagerStyle, get_dark_palette, get_light_palette, get_system_palette
+        from src.gui.themes import ManagerStyle, get_dark_palette, get_light_palette, get_system_palette, styleSheet
         from src.util.util import *
 
         # correct screen scaling
@@ -183,6 +183,7 @@ if __name__ == "__main__":
             data.app.setPalette(data.light_palette)
         else:  # Follow System
             data.app.setPalette(get_system_palette())
+        data.app.setStyleSheet(styleSheet(data.config.theme))
 
         translateToChosenLanguage()
 

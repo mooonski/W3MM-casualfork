@@ -75,6 +75,7 @@ class GroupListTests(unittest.TestCase):
         self.mods = [mod("Clouds", "Visuals"), mod("Rain", "Visuals"), mod("Blood", "Combat"), mod("Boat")]
         self.widget = Mock()
         self.widget.searchString = ""
+        self.widget.listFilter = "all"
         self.widget.treeWidget = QTreeWidget()
         self.widget.treeWidget.setColumnCount(3)
         self.widget.treeWidget.setSortingEnabled(True)
