@@ -16,8 +16,8 @@ from src.util.util import getProgramRootFolder, getVersionString
 
 class VersionTests(unittest.TestCase):
     def test_fork_is_named_in_the_version(self):
-        self.assertEqual(FORK_VERSION, "casual fork 0.1")
-        self.assertIn("(casual fork 0.1)", getVersionString())
+        self.assertEqual(FORK_VERSION, "casual fork 0.2")
+        self.assertIn("(casual fork 0.2)", getVersionString())
         self.assertIn("0.10.5", getVersionString())
 
 
