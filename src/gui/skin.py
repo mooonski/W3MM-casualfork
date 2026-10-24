@@ -34,13 +34,14 @@ class PlayButton(QPushButton):
     '''The accent-coloured button that starts the game, with how it starts (DX12, Steam...) in a small box'''
 
     PADDING = 16
+    HEIGHT = 36
     ICON = 11
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.mode = ''
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(38)
+        self.setMinimumHeight(self.HEIGHT)
 
     def setMode(self, mode: str) -> None:
         self.mode = mode
@@ -65,7 +66,7 @@ class PlayButton(QPushButton):
     def sizeHint(self) -> QSize:
         text = QFontMetrics(self.boldFont()).horizontalAdvance(self.text())
         width = self.PADDING + self.ICON + 9 + text + (10 + self.modeWidth() if self.mode else 0) + self.PADDING + 4
-        return QSize(width, 38)
+        return QSize(width, self.HEIGHT)
 
     def minimumSizeHint(self) -> QSize:
         return self.sizeHint()

@@ -196,9 +196,41 @@ class MainWindowLayoutTests(LayoutTestCase):
         self.assertFalse(widget.updateButton.isVisible(), "Update shows only when updates are waiting")
         self.assertLess(rectIn(widget.pageTitle, window).right(), rectIn(widget.checkButton, window).left())
         self.assertIn("(casual fork 0.2, source)", window.windowTitle())
-        self.assertIs(widget.menubar.cornerWidget(Qt.Corner.TopRightCorner), widget.forkLabel)
+        # the menus open from the logo at the top of the rail; the version sits at its bottom
+        self.assertFalse(widget.menubar.isVisible())
+        self.assertEqual(rectIn(widget.topBar, window).top(), 0, "the top bar is the window's first row")
+        self.assertTrue(widget.toolBar.isHidden(), "the bar for the user's own programs hides while it's empty")
+        # the rail runs down the whole left side; the top bar, the pages and the status row sit right of it
+        self.assertEqual(rectIn(widget.railScroll, window).top(), 0)
+        self.assertEqual(rectIn(widget.railScroll, window).bottom(), window.height() - 1)
+        for part in (widget.topBar, widget.statusRow):
+            self.assertEqual(rectIn(part, window).left(), rectIn(widget.railScroll, window).right() + 1)
+        # and their edges line up: the title, the pages and the health chip; Play, the pages and Log
+        self.assertEqual(rectIn(widget.pageTitle, window).left(), rectIn(widget.tabs, window).left())
+        self.assertEqual(rectIn(widget.runGameButton, window).right(), rectIn(widget.tabs, window).right())
+        self.assertEqual(rectIn(widget.logButton, window).right(), rectIn(widget.tabs, window).right())
+        heights = {button.height() for button in (widget.checkButton, widget.addButton, widget.runGameButton)}
+        self.assertEqual(len(heights), 1, "the top bar's buttons are all one height")
+        self.assertLessEqual(
+            abs(rectIn(widget.rail.logo, window).center().y() - rectIn(widget.runGameButton, window).center().y()), 1
+        )
+        logo = widget.rail.logo
+        self.assertTrue(logo.isVisible())
+        self.assertLess(rectIn(logo, window).bottom(), rectIn(widget.rail.buttons["mods"], window).top())
+        self.assertEqual(
+            [action.text() for action in widget.mainMenu.actions()], ["Mods", "Edit", "Nexus", "Settings", "Help"]
+        )
+        self.assertIs(widget.forkLabel.parent(), widget.rail)
+        self.assertEqual(widget.forkLabel.text(), "casual fork 0.2\nsource")
         self.assertTrue(widget.forkLabel.isVisible())
         self.assertInside(widget.forkLabel, window)
+        self.assertGreater(
+            rectIn(widget.forkLabel, window).top(), rectIn(widget.rail.buttons["settings"], window).top()
+        )
+        # their shortcuts still work with the menu bar hidden
+        shortcuts = {action.shortcut().toString() for action in window.actions()}
+        for key in ("F5", "Del", "Ctrl+R", "Ctrl+S", "F7", "F9", "Ctrl+E", "Ctrl+Q"):
+            self.assertIn(key, shortcuts)
         labels = [widget.treeWidget.headerItem().text(i) for i in range(widget.treeWidget.columnCount())]
         self.assertEqual(len(labels), 17)
         self.assertTrue(all(labels[1:15]), labels)

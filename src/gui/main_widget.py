@@ -11,7 +11,6 @@ from os import path
 from sys import platform
 
 from PySide6.QtCore import (
-    QByteArray,
     QEvent,
     QFileInfo,
     QMetaObject,
@@ -245,6 +244,10 @@ CONTENTS_COLUMN = 16
 DETAIL_COLUMNS = (3, 4, 5, 6, 7, 8, 9)
 # the mod list's filter buttons
 LIST_FILTERS = ("all", "enabled", "disabled", "updates")
+# the gap between the rail or the window's right edge and the top bar, the pages and the status row
+EDGE = 14
+# the top bar's height; the rail centres its logo on the same line
+TOP_BAR_HEIGHT = 64
 
 
 def contentsTags(mod: Mod) -> str:
@@ -324,7 +327,6 @@ class CustomMainWidget(QWidget):
         self.configureUi()
         self.configureToolbar()
         self.configureRail()
-        self.restoreWindowState()
         self.checkLanguage()
         self.checkTheme()
         self.refreshList()
@@ -389,15 +391,6 @@ class CustomMainWidget(QWidget):
             mod.syncPriority()
         self.refreshList()
 
-    def restoreWindowState(self):
-        '''Restore the toolbar position/layout saved from a previous session'''
-        state = data.getConfig().get("WINDOW", "state")
-        if state:
-            try:
-                self.mainWindow.restoreState(QByteArray.fromBase64(state.encode("ascii")))
-            except Exception as err:
-                print("failed to restore window state:", err)
-
     def setupMainWindow(self):
         '''Configure main window properties'''
         self.mainWindow.setObjectName("MainWindow")
@@ -423,29 +416,27 @@ class CustomMainWidget(QWidget):
         self.menubar.setGeometry(QRect(0, 0, 583, 21))
         self.menubar.setObjectName("menubar")
         self.mainWindow.setMenuBar(self.menubar)
-        # says which build this is, top right of the menu bar
-        self.forkLabel = QLabel(forkLabel(), self.menubar)
+        # the menus open from the logo at the top of the rail instead (configureRail)
+        self.menubar.setVisible(False)
+        # says which build this is, at the bottom of the rail
+        self.forkLabel = QLabel(forkLabel().replace(", ", "\n"), self.rail)
         self.forkLabel.setObjectName("forkLabel")
         self.forkLabel.setToolTip(getVersionString())
-        self.forkLabel.setContentsMargins(0, 0, 10, 0)
         self.forkLabel.setStyleSheet(f"color: {statusColor('muted').name()};")
-        self.menubar.setCornerWidget(self.forkLabel, Qt.Corner.TopRightCorner)
-        # the claw marks and the name, before the menus
-        self.brandLabel = QLabel(self.menubar)
-        self.brandLabel.setObjectName("brandLabel")
-        self.brandLabel.setPixmap(getIcon("w3mm-fork.ico").pixmap(18, 18))
-        self.brandLabel.setContentsMargins(10, 0, 6, 0)
-        self.brandLabel.setToolTip(TITLE)
-        self.menubar.setCornerWidget(self.brandLabel, Qt.Corner.TopLeftCorner)
 
-        # the top bar: the page's title, then Check for Updates, Update, Add Mod, Script Merger and Play
-        self.toolBar = QToolBar(self.mainWindow)
-        self.toolBar.setObjectName("toolBar")
-        self.toolBar.setMovable(False)
-        self.mainWindow.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.toolBar)
-        heading = QWidget(self.toolBar)
+        # the top bar: the page's title, then Check for Updates, Update, Add Mod, Script Merger and Play. It heads
+        # the column right of the rail, so the rail runs down the whole left side, and its edges line up with the
+        # pages' below
+        self.topBar = QFrame(self.centralwidget)
+        self.topBar.setObjectName("topBar")
+        bar = QHBoxLayout(self.topBar)
+        bar.setContentsMargins(EDGE, 0, EDGE, 0)
+        # a set height, so the logo at the top of the rail (centred on TOP_BAR_HEIGHT / 2) lines up with it
+        self.topBar.setFixedHeight(TOP_BAR_HEIGHT)
+        bar.setSpacing(8)
+        heading = QWidget(self.topBar)
         headingLayout = QVBoxLayout(heading)
-        headingLayout.setContentsMargins(8, 0, 20, 0)
+        headingLayout.setContentsMargins(0, 0, 0, 0)
         headingLayout.setSpacing(0)
         self.pageTitle = QLabel(heading)
         self.pageTitle.setObjectName("pageTitle")
@@ -453,57 +444,59 @@ class CustomMainWidget(QWidget):
         self.pageSubtitle.setObjectName("pageSubtitle")
         headingLayout.addWidget(self.pageTitle)
         headingLayout.addWidget(self.pageSubtitle)
-        self.toolBar.addWidget(heading)
-        spacer = QWidget(self.toolBar)
-        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.toolBar.addWidget(spacer)
-        # programs the user put on the bar go before Check for Updates
+        bar.addWidget(heading, 0, Qt.AlignmentFlag.AlignVCenter)
+        bar.addStretch(1)
+        # programs the user put on the bar (right-click it to add one); hidden while there are none
+        self.toolBar = QToolBar(self.topBar)
+        self.toolBar.setObjectName("toolsBar")
+        self.toolBar.setMovable(False)
+        self.toolBar.setVisible(False)
         self.customToolbarActions: list[QAction] = []
-        self.checkButton = QPushButton(self.toolBar)
+        bar.addWidget(self.toolBar)
+        self.checkButton = QPushButton(self.topBar)
         self.checkButton.setObjectName("checkButton")
-        self.checkButton.setProperty("top", True)
         self.checkButton.clicked.connect(lambda: self.actionCheckUpdates.trigger())
-        self.checkButtonAction = self.toolBar.addWidget(self.checkButton)
-        self.updateButton = QPushButton(self.toolBar)
+        self.updateButton = QPushButton(self.topBar)
         self.updateButton.setObjectName("updateAllButton")
-        self.updateButton.setProperty("top", True)
         self.updateButton.clicked.connect(lambda: self.actionUpdateMods.trigger())
-        self.updateButtonAction = self.toolBar.addWidget(self.updateButton)
-        self.updateButtonAction.setVisible(False)
-        self.addButton = QPushButton(self.toolBar)
+        self.updateButton.setVisible(False)
+        self.addButton = QPushButton(self.topBar)
         self.addButton.setObjectName("addButton")
-        self.addButton.setProperty("top", True)
         self.addButton.clicked.connect(lambda: self.actionInstall_Mods.trigger())
-        self.toolBar.addWidget(self.addButton)
-        self.toolBar.addSeparator()
-        self.scriptMergerButton = QPushButton(self.toolBar)
+        self.scriptMergerButton = QPushButton(self.topBar)
         self.scriptMergerButton.setObjectName("scriptMergerButton")
-        self.scriptMergerButton.setProperty("top", True)
-        self.toolBar.addWidget(self.scriptMergerButton)
-        gap = QWidget(self.toolBar)
-        gap.setFixedWidth(8)
-        self.toolBar.addWidget(gap)
-        self.runGameButton = PlayButton(self.toolBar)
+        divider = QFrame(self.topBar)
+        divider.setObjectName("topDivider")
+        divider.setFixedSize(1, 24)
+        self.runGameButton = PlayButton(self.topBar)
         self.runGameButton.setObjectName("runGameButton")
-        self.toolBar.addWidget(self.runGameButton)
+        for button in (self.checkButton, self.updateButton, self.addButton, self.scriptMergerButton):
+            button.setProperty("top", True)
+            # every button on the bar is as tall as Play
+            button.setFixedHeight(PlayButton.HEIGHT)
+        for part in (self.checkButton, self.updateButton, self.addButton, divider, self.scriptMergerButton):
+            bar.addWidget(part)
+        bar.addWidget(self.runGameButton)
+        self.verticalLayout_2.insertWidget(0, self.topBar)
 
     def setupUI(self):
         '''Setup all UI components'''
         # Central widget
         self.centralwidget = QWidget(self.mainWindow)
         self.centralwidget.setObjectName("centralwidget")
-        self.verticalLayout_2 = QVBoxLayout(self.centralwidget)
+        # the rail down the whole left side, and a column with the top bar, the pages and the status row
+        self.bodyRow = QHBoxLayout(self.centralwidget)
+        self.bodyRow.setContentsMargins(0, 0, 0, 0)
+        self.bodyRow.setSpacing(0)
+        self.verticalLayout_2 = QVBoxLayout()
         self.verticalLayout_2.setObjectName("verticalLayout_2")
         self.verticalLayout_2.setContentsMargins(0, 0, 0, 0)
         self.verticalLayout_2.setSpacing(0)
-        # the tabs and the log, inset from the window's edges; the status row runs along the bottom edge
+        # the tabs and the log, inset by EDGE, the same as the top bar and the status row
         self.contentLayout = QVBoxLayout()
-        self.contentLayout.setContentsMargins(12, 10, 12, 10)
+        self.contentLayout.setContentsMargins(EDGE, 10, EDGE, 10)
         self.contentLayout.setSpacing(8)
-        # the section buttons down the left, filled in by configureRail once the actions exist
-        self.bodyRow = QHBoxLayout()
-        self.bodyRow.setContentsMargins(0, 0, 0, 0)
-        self.bodyRow.setSpacing(0)
+        # the section buttons, filled in by configureRail once the actions exist
         self.rail = SectionRail(self.centralwidget)
         # in a short window the rail scrolls rather than squeezing its buttons
         self.railScroll = QScrollArea(self.centralwidget)
@@ -514,8 +507,8 @@ class CustomMainWidget(QWidget):
         self.railScroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.railScroll.setFixedWidth(self.rail.width())
         self.bodyRow.addWidget(self.railScroll)
-        self.bodyRow.addLayout(self.contentLayout, 1)
-        self.verticalLayout_2.addLayout(self.bodyRow, 1)
+        self.bodyRow.addLayout(self.verticalLayout_2, 1)
+        self.verticalLayout_2.addLayout(self.contentLayout, 1)
 
         # Tabs: the installed mods, and browsing Nexus
         self.tabs = QTabWidget(self.centralwidget)
@@ -666,7 +659,7 @@ class CustomMainWidget(QWidget):
         self.statusRow = QFrame(self.centralwidget)
         self.statusRow.setObjectName("statusRow")
         row = QHBoxLayout(self.statusRow)
-        row.setContentsMargins(10, 4, 8, 4)
+        row.setContentsMargins(EDGE, 5, EDGE, 5)
         row.setSpacing(12)
         self.healthChip = QPushButton(self.statusRow)
         self.healthChip.setObjectName("healthChip")
@@ -734,6 +727,9 @@ class CustomMainWidget(QWidget):
         self.resizeColumns()
         self.applyRowSize()
         self.fitTickColumn()
+        # the name takes the width the other columns leave, so the rows reach the list's right edge
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setMinimumSectionSize(24)
 
         self.actionInstall_Mods.triggered.connect(self.installMods)
         self.actionUninstall_Mods.triggered.connect(self.uninstallMods)
@@ -804,8 +800,8 @@ class CustomMainWidget(QWidget):
         self.treeWidget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.treeWidget.customContextMenuRequested.connect(self.openMenu)
 
-        self.toolBar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.toolBar.customContextMenuRequested.connect(self.toolbarMenu)
+        self.topBar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.topBar.customContextMenuRequested.connect(self.toolbarMenu)
 
         self.textEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.textEdit.customContextMenuRequested.connect(self.openEditMenu)
@@ -876,6 +872,7 @@ class CustomMainWidget(QWidget):
         for action in self.customToolbarActions:
             self.toolBar.removeAction(action)
         self.customToolbarActions = []
+        self.toolBar.setVisible(False)
         for custom in data.getConfig().getOptions("TOOLBAR"):
             self.addToToolbar(custom)
         self.actionAddToToolbar = QAction(self.mainWindow)
@@ -913,8 +910,18 @@ class CustomMainWidget(QWidget):
         return menu
 
     def configureRail(self) -> None:
-        '''The section buttons: the three pages instead of tabs, then places that open something'''
+        '''The logo with the program's menus, then the three pages instead of tabs, then places that open something'''
         rail = self.rail
+        self.mainMenu = QMenu(self.mainWindow)
+        for menu in (self.menuFile, self.menuEdit, self.menuNexus, self.menuSettings, self.menuHelp):
+            self.mainMenu.addMenu(menu)
+        rail.addLogo(
+            getIcon("w3mm-fork.ico"),
+            translate("MainWindow", "Menu: Mods, Edit, Nexus, Settings, Help"),
+            self.mainMenu,
+            TOP_BAR_HEIGHT // 2,
+        )
+        self.keepShortcuts()
         rail.addPage("mods", translate("MainWindow", "Mods"), "grid", translate("MainWindow", "The installed mods"))
         rail.addPage(
             "downloads",
@@ -990,6 +997,7 @@ class CustomMainWidget(QWidget):
         )
         rail.addStretch()
         rail.addMenu("settings", translate("MainWindow", "Settings"), "sliders", "", self.menuSettings)
+        rail.addNote(self.forkLabel)
         rail.pageChosen.connect(self.showPage)
         self.tabs.tabBar().hide()
         self.tabs.currentChanged.connect(lambda _: rail.setCurrent(self.pageKey()))
@@ -1019,6 +1027,26 @@ class CustomMainWidget(QWidget):
             translate("MainWindow", "The order the game loads mods in (mods.settings); drag a mod to move it")
         )
         self.showSideView("loadorder" if data.getConfig().get("WINDOW", "sideview") == "loadorder" else "details")
+
+    def keepShortcuts(self) -> None:
+        '''The menu bar is hidden, so its actions are added to the window too, where their shortcuts (F5, Del,
+        Ctrl+R...) still work'''
+
+        def actionsIn(menu: QMenu) -> list[QAction]:
+            found = []
+            for action in menu.actions():
+                if action.menu() is not None:
+                    found += actionsIn(action.menu())
+                elif not action.shortcut().isEmpty():
+                    found.append(action)
+            return found
+
+        actions = []
+        for menu in (self.menuFile, self.menuEdit, self.menuNexus, self.menuSettings, self.menuHelp):
+            actions += actionsIn(menu)
+        # Play and Script Merger are buttons now, so their actions live on in no menu
+        actions += [self.actionRun_The_Game, self.actionRun_Script_Merger]
+        self.mainWindow.addActions(list(dict.fromkeys(actions)))
 
     def pageWidgets(self) -> dict:
         return {"mods": self.installedTab, "downloads": self.downloads, "nexus": self.browse}
@@ -1093,7 +1121,7 @@ class CustomMainWidget(QWidget):
             button.setIcon(icon(name))
             button.setIconSize(QSize(16, 16))
         self.updateButton.setText(translate("MainWindow", "Update") + f" {self.updateCount}")
-        self.updateButtonAction.setVisible(self.updateCount > 0)
+        self.updateButton.setVisible(self.updateCount > 0)
 
     def openMenu(self, position):
         '''Right click menu on mod list (Left panel)'''
@@ -1153,13 +1181,14 @@ class CustomMainWidget(QWidget):
             rem.addAction(temp)
             del action
         menu.addAction(rem.menuAction())
-        menu.exec(self.toolBar.mapToGlobal(position))
+        menu.exec(QCursor.pos())
 
     def removeFromToolbar(self, action):
         '''Creates menu for removing actions from toolbar'''
         self.toolBar.removeAction(action)
         if action in self.customToolbarActions:
             self.customToolbarActions.remove(action)
+        self.toolBar.setVisible(bool(self.customToolbarActions))
         data.getConfig().removeOption("TOOLBAR", action.toolTip())
 
     def addToToolbar(self, selected=""):
@@ -1181,8 +1210,9 @@ class CustomMainWidget(QWidget):
                 actionTemp.setText(fl)
                 actionTemp.setIcon(icon)
                 actionTemp.setToolTip(selected)
-                self.toolBar.insertAction(self.checkButtonAction, actionTemp)
+                self.toolBar.addAction(actionTemp)
                 self.customToolbarActions.append(actionTemp)
+                self.toolBar.setVisible(True)
                 data.getConfig().setOption("TOOLBAR", selected)
         except Exception as err:
             self.output(formatUserError(err))
@@ -4496,7 +4526,8 @@ class CustomMainWidget(QWidget):
                     translate("MainWindow", "problem or warning"),
                     translate("MainWindow", "problems or warnings"),
                 )
-                + " (Mods > Health Check...)"
+                + " "
+                + translate("MainWindow", "(Health, on the left)")
             )
 
     def changeTheme(self, theme):
@@ -4549,9 +4580,6 @@ class CustomMainWidget(QWidget):
         self.listDelegate.setComfortable(comfortable)
         # separators stay short when the rows are tall
         self.treeWidget.setUniformRowHeights(not comfortable)
-        # the name needs room beside the picture
-        if comfortable and self.treeWidget.header().sectionSize(1) < 300:
-            self.treeWidget.header().resizeSection(1, 300)
         self.treeWidget.doItemsLayout()
 
     def checkTheme(self):

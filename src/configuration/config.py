@@ -513,10 +513,7 @@ class Configuration:
             self.set('WINDOW', 'width', str(window.width()))
             self.set('WINDOW', 'height', str(window.height()))
         self.set('WINDOW', 'maximized', '1' if window.isMaximized() else '0')
-        try:
-            self.set("WINDOW", "state", bytes(window.saveState().toBase64().data()).decode("ascii"))
-        except Exception as err:
-            print('failed to save window state', err, file=sys.stderr)
+        # no "state": the window has no movable toolbars any more, and restoring an old one left a gap at the top
         for i in range(0, ui.treeWidget.header().count() + 1):
             if ui.treeWidget.header().isSectionHidden(i):
                 continue  # a hidden column measures 0; keep its width for when it is shown again

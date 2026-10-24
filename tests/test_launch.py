@@ -269,16 +269,15 @@ class GuiContractTests(unittest.TestCase):
         window = QMainWindow()
         self.addCleanup(window.close)
         toolbar = QToolBar(window)
-        checkButton = toolbar.addWidget(QWidget())
-        widget = Mock(mainWindow=window, toolBar=toolbar, checkButtonAction=checkButton, customToolbarActions=[])
+        toolbar.setVisible(False)
+        widget = Mock(mainWindow=window, toolBar=toolbar, customToolbarActions=[])
         selected = "/tools/Menu Filelist Updater/updater.exe"
         with patch.object(data, "config") as config, patch("src.gui.main_widget.openFile") as open_file:
             CustomMainWidget.addToToolbar(widget, selected)
             self.assertEqual(len(widget.customToolbarActions), 1)
             action = widget.customToolbarActions[0]
-            self.assertEqual(
-                toolbar.actions(), [action, checkButton], "the user's programs go before Check for Updates"
-            )
+            self.assertEqual(toolbar.actions(), [action])
+            self.assertFalse(toolbar.isHidden(), "the programs' bar shows once it has one")
             action.trigger()
             open_file.assert_called_once_with(selected)
             config.setOption.assert_called_once_with("TOOLBAR", selected)

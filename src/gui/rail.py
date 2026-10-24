@@ -1,15 +1,15 @@
-'''The column of section buttons down the left of the window: pages (Mods, Downloads, Nexus) and places
-that open something (Load Order, Health, Saves, Tools, Settings)'''
+'''The column of section buttons down the left of the window: the logo with the program's menus, pages (Mods,
+Downloads, Nexus) and places that open something (Load Order, Health, Saves, Tools, Settings)'''
 
 from collections.abc import Callable
 
 from PySide6.QtCore import QPoint, QSize, Qt, Signal
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QButtonGroup, QFrame, QMenu, QSizePolicy, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtGui import QColor, QIcon
+from PySide6.QtWidgets import QButtonGroup, QFrame, QLabel, QMenu, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from src.gui.icons import badgedIcon
 
-BUTTON_SIZE = QSize(68, 50)
+BUTTON_SIZE = QSize(68, 46)
 
 
 class SectionRail(QFrame):
@@ -20,7 +20,7 @@ class SectionRail(QFrame):
         self.setObjectName("rail")
         self.setFixedWidth(BUTTON_SIZE.width() + 14)
         self.layout_ = QVBoxLayout(self)
-        self.layout_.setContentsMargins(7, 8, 7, 8)
+        self.layout_.setContentsMargins(7, 9, 7, 4)
         self.layout_.setSpacing(2)
         self.layout_.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
         self.buttons: dict[str, QToolButton] = {}
@@ -65,6 +65,33 @@ class SectionRail(QFrame):
         button = self.button(key, label, iconName, tip)
         button.clicked.connect(lambda: menu.exec(button.mapToGlobal(QPoint(button.width() + 4, 0))))
         return button
+
+    def addLogo(self, logo: QIcon, tip: str, menu: QMenu, centreY: int = 32) -> QToolButton:
+        '''The large logo at the top, which opens the program's menus to its right'''
+        button = QToolButton(self)
+        button.setObjectName("railLogo")
+        button.setIcon(logo)
+        button.setIconSize(QSize(28, 28))
+        button.setFixedSize(QSize(BUTTON_SIZE.width(), 44))
+        # centred on centreY, the middle of the top bar beside the rail
+        margins = self.layout_.contentsMargins()
+        self.layout_.setContentsMargins(margins.left(), centreY - 22, margins.right(), margins.bottom())
+        button.setToolTip(tip)
+        button.setAutoRaise(True)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.clicked.connect(lambda: menu.exec(button.mapToGlobal(QPoint(button.width() + 4, 0))))
+        self.logo = button
+        self.layout_.addWidget(button)
+        self.layout_.addSpacing(3)
+        return button
+
+    def addNote(self, label: QLabel) -> None:
+        '''Small text at the bottom, e.g. which version this is'''
+        label.setParent(self)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setWordWrap(True)
+        label.setFixedWidth(BUTTON_SIZE.width())
+        self.layout_.addWidget(label)
 
     def addStretch(self) -> None:
         spacer = QWidget(self)
