@@ -26,6 +26,8 @@ The Nexus features need a Nexus Mods API key, set with **Nexus > Set API Key...*
 
 - A setup page on the first run, and under **Settings > Setup...** later: the game folder (found through Steam or GOG where possible), Script Merger (found next to the game or the download folder), the download folder and the Nexus API key, with a button that checks the key.
 
+- **Help > Update Manager...** checks the fork's GitHub releases for a newer version, shows what's new, and installs it: the installer is downloaded, checked against the hash in the release notes and run, and the manager starts again afterwards. Installed copies also check once a day at startup (can be turned off in that dialog). A copy running from source only shows the release page.
+
 ### Nexus Mods
 
 - **Check for Updates** marks every mod with a Nexus ID that has a newer file, and **Update** installs it in place of the old version. The update keeps the mod's priority, enabled state and separator, backs up the old version first, and records the exact Nexus file installed. **Restore Previous Version...** brings a backup back.

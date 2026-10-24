@@ -105,6 +105,18 @@ from src.core.scriptmerger import (
     latestScriptMerger,
     nexusId,
 )
+from src.core.selfupdate import (
+    RELEASES_URL,
+    UpdateCheckResult,
+    downloadInstaller,
+    dueForCheck,
+    isInstalledBuild,
+    launchInstaller,
+    recordCheck,
+)
+from src.core.selfupdate import (
+    checkForUpdate as checkManagerRelease,
+)
 from src.core.smupdate import ScriptMergerUpdateFailed
 from src.core.smupdate import updateScriptMerger as updateScriptMergerFiles
 from src.core.updater import ModUpdater
@@ -124,6 +136,7 @@ from src.gui.health_dialog import HealthDialog
 from src.gui.history_dialog import DownloadHistoryDialog
 from src.gui.icons import icon
 from src.gui.load_order_tree import LoadOrderTree
+from src.gui.manager_update_dialog import INSTALL, OPEN_PAGE, ManagerUpdateDialog
 from src.gui.mod_preview import ModPreview
 from src.gui.nexus_dialogs import (
     SWITCH,
@@ -253,6 +266,8 @@ class CustomMainWidget(QWidget):
         self.detectScriptMerger()
         self.reportHealth()
         QTimer.singleShot(1500, self.checkNxmHandler)
+        if dueForCheck(data.getConfig()):
+            QTimer.singleShot(4000, lambda: self.checkManagerUpdate(automatic=True))
         self.refreshNexusDetails(silent=True, onlyMissing=True)
         self.refreshEndorsements()
 
@@ -530,6 +545,7 @@ class CustomMainWidget(QWidget):
         self.actionReinstall_Mods.triggered.connect(self.reinstallMods)
         self.actionReinstallFiles.triggered.connect(self.reinstallFromArchives)
         self.actionAbout.triggered.connect(showAboutWindow)
+        self.actionManagerUpdate.triggered.connect(lambda: self.checkManagerUpdate(automatic=False))
         self.actionEnable_Disable_Mods.triggered.connect(self.enableDisableMods)
         self.actionRefresh_Mod_List.triggered.connect(lambda e: self.reloadPriorities())
         self.actionRefresh_Load_Order.triggered.connect(lambda e: self.refreshLoadOrder())
@@ -2414,6 +2430,75 @@ class CustomMainWidget(QWidget):
             return
         ReShadeDialog(self, config.game, config.backups, self.output).exec()
 
+    # Updating the manager itself
+
+    def checkManagerUpdate(self, automatic: bool = False) -> None:
+        '''Looks for a newer release of the fork on GitHub. The automatic check (at startup, once a day) is silent
+        unless there is one.'''
+        if self.nexusWorker is not None and self.nexusWorker.isRunning():
+            if not automatic:
+                self.nexusBusy()
+            return
+        config = data.getConfig()
+        if automatic:
+            recordCheck(config)
+        else:
+            self.output(translate("MainWindow", "Checking GitHub for a newer manager..."))
+        self.runNexus(lambda progress: checkManagerRelease(), lambda result: self.managerChecked(result, automatic))
+
+    def managerChecked(self, result: UpdateCheckResult, automatic: bool) -> None:
+        if result.errors and not automatic:
+            self.output(result.errors[0])
+            return
+        if not result.available:
+            if not automatic:
+                latest = result.latest.version if result.latest else "?"
+                self.output(
+                    translate("MainWindow", "The manager is up to date")
+                    + f" ({translate('MainWindow', 'you have')} {result.current}, "
+                    + f"{translate('MainWindow', 'newest release')} {latest})."
+                )
+            return
+        release = result.latest
+        assert release is not None
+        config = data.getConfig()
+        installable = isInstalledBuild() and release.installable
+        dialog = ManagerUpdateDialog(
+            self, release, result.current, installable, config.get("SETTINGS", "checkmanagerupdates", "1") == "1"
+        )
+        dialog.exec()
+        config.set("SETTINGS", "checkmanagerupdates", "1" if dialog.autoCheck.isChecked() else "0")
+        if dialog.action == OPEN_PAGE:
+            openUrl(release.url or RELEASES_URL)
+        elif dialog.action == INSTALL:
+            self.installManagerUpdate(release)
+        else:
+            self.output(
+                translate("MainWindow", "casual fork") + f" {release.version} "
+                + translate("MainWindow", "is available (Help > Update Manager...).")
+            )  # fmt: skip
+
+    def installManagerUpdate(self, release) -> None:
+        '''Downloads the release's installer and hands over to it'''
+        if self.nexusBusy():
+            return
+        folder = data.getConfig().archives
+        self.output(translate("MainWindow", "Downloading") + f" {release.installerName}...")
+        self.runNexus(
+            lambda progress: downloadInstaller(release, folder, progress=progress),
+            lambda installer: self.managerInstallerReady(release, installer),
+        )
+
+    def managerInstallerReady(self, release, installer: str) -> None:
+        self.output(translate("MainWindow", "Installing") + f" {release.version}. " +
+                    translate("MainWindow", "The manager closes now and starts again when the update is done."))  # fmt: skip
+        try:
+            launchInstaller(installer)
+        except OSError as error:
+            self.output(translate("MainWindow", "Could not start the installer:") + f" {error}")
+            return
+        QTimer.singleShot(500, self.mainWindow.close)
+
     def showSetup(self) -> None:
         config = data.getConfig()
         before = (config.game, config.scriptmerger, config.archives, bool(config.nexusapikey))
@@ -3819,6 +3904,9 @@ class CustomMainWidget(QWidget):
         self.actionAbout = QAction(self.mainWindow)
         self.actionAbout.setObjectName("actionAbout")
 
+        self.actionManagerUpdate = QAction(self.mainWindow)
+        self.actionManagerUpdate.setObjectName("actionManagerUpdate")
+
         self.actionRename = QAction(self.mainWindow)
         self.actionRename.setObjectName("actionRename")
 
@@ -4065,6 +4153,7 @@ class CustomMainWidget(QWidget):
         self.menuNexus.addAction(self.actionBackupSaves)
 
         # --- Build Help menu ---
+        self.menuHelp.addAction(self.actionManagerUpdate)
         self.menuHelp.addAction(self.actionAbout)
         self.menuHelp.addAction(self.actionMain_Web_Page)
         self.menuHelp.addAction(self.actionGitHub)
@@ -4194,6 +4283,10 @@ class CustomMainWidget(QWidget):
         self.actionRun_Script_Merger.setIconText(translate("MainWindow", "Script Merger"))
         self.actionRun_Script_Merger.setToolTip(translate("MainWindow", "Run Script Merger (Ctrl+S)"))
         self.actionAbout.setText(translate("MainWindow", "About"))
+        self.actionManagerUpdate.setText(translate("MainWindow", "Update Manager..."))
+        self.actionManagerUpdate.setToolTip(
+            translate("MainWindow", "Checks the fork's GitHub releases for a newer version and installs it")
+        )
         self.actionAbout.setShortcut("F1")
         self.actionMain_Web_Page.setText(translate("MainWindow", "Main Web Page"))
         self.actionGitHub.setText(translate("MainWindow", "GitHub"))

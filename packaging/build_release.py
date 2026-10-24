@@ -62,6 +62,9 @@ def leftOut(relative: str) -> bool:
     if parts[:2] == ['lib', 'PySide6']:
         if len(parts) == 3 and isQtFile(parts[2]):
             return not keptQtFile(parts[2])
+        # FFmpeg, shipped for Qt Multimedia
+        if len(parts) == 3 and parts[2].lower().startswith(('avcodec', 'avformat', 'avutil', 'swscale', 'swresample')):
+            return True
         if len(parts) >= 4 and parts[2] == 'plugins':
             return parts[3] not in QT_PLUGINS
     return False
