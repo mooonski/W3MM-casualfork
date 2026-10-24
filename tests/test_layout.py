@@ -195,7 +195,7 @@ class MainWindowLayoutTests(LayoutTestCase):
         self.assertEqual(widget.toolBar.iconSize().width(), 24)
         self.assertFalse(widget.actionUpdateMods.icon().isNull())
         self.assertEqual(widget.actionRun_Script_Merger.iconText(), "Script Merger")
-        self.assertIn("(casual fork 0.2)", window.windowTitle())
+        self.assertIn("(casual fork 0.2, source)", window.windowTitle())
         self.assertIs(widget.menubar.cornerWidget(Qt.Corner.TopRightCorner), widget.forkLabel)
         self.assertTrue(widget.forkLabel.isVisible())
         self.assertInside(widget.forkLabel, window)

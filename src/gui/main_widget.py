@@ -358,7 +358,7 @@ class CustomMainWidget(QWidget):
         self.menubar.setObjectName("menubar")
         self.mainWindow.setMenuBar(self.menubar)
         # says which build this is, top right of the menu bar
-        self.forkLabel = QLabel(FORK_VERSION, self.menubar)
+        self.forkLabel = QLabel(forkLabel(), self.menubar)
         self.forkLabel.setObjectName("forkLabel")
         self.forkLabel.setToolTip(getVersionString())
         self.forkLabel.setContentsMargins(0, 0, 10, 0)
@@ -4177,7 +4177,7 @@ class CustomMainWidget(QWidget):
         self.menuSettings.addAction(self.menuConfigure_Settings.menuAction())
 
     def translateUi(self):
-        self.mainWindow.setWindowTitle(translate("MainWindow", TITLE) + f" ({FORK_VERSION})")
+        self.mainWindow.setWindowTitle(translate("MainWindow", TITLE) + f" ({forkLabel()})")
 
         self.treeWidget.headerItem().setText(0, translate("MainWindow", "Enabled"))
         self.treeWidget.headerItem().setText(1, translate("MainWindow", "Mod Name"))

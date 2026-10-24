@@ -10,14 +10,17 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 import main
-from src.globals.constants import APP_ID, FORK_VERSION
+from src.globals.constants import APP_ID, FORK_VERSION, forkLabel
 from src.util.util import getProgramRootFolder, getVersionString
 
 
 class VersionTests(unittest.TestCase):
     def test_fork_is_named_in_the_version(self):
         self.assertEqual(FORK_VERSION, "casual fork 0.2")
-        self.assertIn("(casual fork 0.2)", getVersionString())
+        self.assertIn("(casual fork 0.2, source)", getVersionString())
+        with patch.object(sys, "frozen", True, create=True):
+            self.assertEqual(forkLabel(), "casual fork 0.2, installed")
+            self.assertIn("(casual fork 0.2, installed)", getVersionString())
         self.assertIn("0.10.5", getVersionString())
 
 

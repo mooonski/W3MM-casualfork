@@ -118,9 +118,9 @@ def getConfigFolderName() -> str:
 
 
 def getVersionString() -> str:
-    from src.globals.constants import FORK_VERSION, TITLE, VERSION
+    from src.globals.constants import TITLE, VERSION, forkLabel
 
-    return f"{TITLE} {VERSION} ({FORK_VERSION})"
+    return f"{TITLE} {VERSION} ({forkLabel()})"
 
 
 def getProgramRootFolder() -> str:
@@ -184,7 +184,7 @@ def reconfigureScriptMergerPath():
 
 
 def showAboutWindow():
-    from src.globals.constants import AUTHORS, FORK_VERSION, TITLE, VERSION, translate
+    from src.globals.constants import AUTHORS, TITLE, VERSION, forkLabel, translate
 
     QMessageBox.about(
         None,
@@ -194,7 +194,7 @@ def showAboutWindow():
         + "\n"
         + translate("MainWindow", "Version: ")
         + VERSION
-        + f" ({FORK_VERSION})"
+        + f" ({forkLabel()})"
         + "\n"
         + translate("MainWindow", "This fork adds Nexus updates, RMMR import, Script Merger checks and more.")
         + "\n\n"
