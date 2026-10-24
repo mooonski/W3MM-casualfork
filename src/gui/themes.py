@@ -27,6 +27,53 @@ STEEL = {
     'blueSoft': '#1d2e44',
 }
 
+# the accent colours to choose from (Settings > Accent Colour); "light" is the accent on the light themes
+ACCENTS = {
+    'red': {
+        'accent': '#d13b40',
+        'accentHover': '#dc4a4f',
+        'accentPressed': '#b5323a',
+        'accentText': '#ff8080',
+        'selection': '#3a2328',
+        'light': '#c62f35',
+        'lightText': '#b4232a',
+    },
+    'blue': {
+        'accent': '#2771c4',
+        'accentHover': '#2f7fd6',
+        'accentPressed': '#2161a8',
+        'accentText': '#86c4ff',
+        'selection': '#1a293c',
+        'light': '#1d6fd6',
+        'lightText': '#1a63c0',
+    },
+}
+# tick boxes ("box") or on/off switches ("switch") for every checkbox
+TICK_STYLES = ('box', 'switch')
+_chosen = {'accent': 'red', 'ticks': 'box'}
+
+
+def setAccent(name: str) -> None:
+    _chosen['accent'] = name if name in ACCENTS else 'red'
+
+
+def accentName() -> str:
+    return _chosen['accent']
+
+
+def setTickStyle(name: str) -> None:
+    _chosen['ticks'] = name if name in TICK_STYLES else 'box'
+
+
+def tickStyle() -> str:
+    return _chosen['ticks']
+
+
+def steel() -> dict[str, str]:
+    '''The Steel colours with the chosen accent'''
+    accent = ACCENTS[_chosen['accent']]
+    return {**STEEL, **{key: value for key, value in accent.items() if key in STEEL}}
+
 
 def _shading(palette: QPalette, light: QColor, midlight: QColor, mid: QColor, dark: QColor, shadow: QColor) -> None:
     '''The colours Qt draws frames, checkbox borders and separators with; without them it uses unrelated defaults'''
@@ -48,7 +95,7 @@ def _disabled(palette: QPalette, text: QColor) -> None:
 
 
 def get_dark_palette():
-    color = {name: QColor(value) for name, value in STEEL.items()}
+    color = {name: QColor(value) for name, value in steel().items()}
     palette = QPalette()
     palette.setColor(QPalette.ColorRole.Window, color['bg'])
     palette.setColor(QPalette.ColorRole.WindowText, color['text'])
@@ -158,12 +205,17 @@ QScrollBar::handle:hover { background: #3f464f; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: none; }
 QSplitter::handle { background: transparent; }
+QFrame#rail { background: $bg; border-right: 1px solid $line; }
+QToolButton[rail="true"] { background: transparent; color: $muted; border: none; border-radius: 8px; padding: 4px 0; font-size: 8pt; }
+QToolButton[rail="true"]:hover { background: $hover; color: $text; }
+QToolButton[rail="true"]:checked { background: $selection; color: #ffffff; }
+QTabBar#previewTabs::tab { padding: 6px 0; margin: 0 14px 0 0; }
 ''')
 
 
 def styleSheet(theme: str) -> str:
     '''The application style sheet for a theme ("Dark", "Light" or "Follow System")'''
-    return STEEL_SHEET.substitute(STEEL) if theme == 'Dark' else ''
+    return STEEL_SHEET.substitute(steel()) if theme == 'Dark' else ''
 
 
 # colours for problems, warnings and less important text, readable on the current theme's background
@@ -174,8 +226,6 @@ STATUS_COLORS = {
     'ok': (QColor(120, 190, 120), QColor(30, 120, 50)),
     # mods the game installed from mod.io
     'modio': (QColor(60, 160, 255), QColor(0, 100, 240)),
-    # the accent as text: endorsed thumbs, the selected row's edge
-    'accent': (QColor(STEEL['accentText']), QColor(180, 35, 42)),
     'update': (QColor(STEEL['blue']), QColor(11, 99, 201)),
 }
 
@@ -188,26 +238,44 @@ def isDark(palette: QPalette | None = None) -> bool:
 
 
 def statusColor(kind: str, palette: QPalette | None = None) -> QColor:
-    '''A colour for "problem", "warning", "muted" or "ok" text that's readable in the current theme'''
+    '''A colour for "problem", "warning", "muted" or "ok" text that's readable in the current theme; "accent" is
+    the chosen accent as text (endorsed thumbs)'''
+    if kind == 'accent':
+        accent = ACCENTS[_chosen['accent']]
+        return QColor(accent['accentText'] if isDark(palette) else accent['lightText'])
     dark, light = STATUS_COLORS[kind]
     return QColor(dark if isDark(palette) else light)
 
 
 def accentColor(palette: QPalette | None = None) -> QColor:
     '''The fill colour of the main buttons and ticked boxes'''
-    return QColor(STEEL['accent']) if isDark(palette) else QColor(198, 47, 53)
+    accent = ACCENTS[_chosen['accent']]
+    return QColor(accent['accent'] if isDark(palette) else accent['light'])
 
 
 class ManagerStyle(QProxyStyle):
-    '''Fusion, with checkboxes that stay visible on light backgrounds (Fusion draws them very pale there) and
-    rounded, accent-filled ones on dark'''
+    '''Fusion, with checkboxes that stay visible on light backgrounds (Fusion draws them very pale there),
+    rounded, accent-filled ones on dark, or on/off switches when those are chosen'''
 
     CHECKS = (QStyle.PrimitiveElement.PE_IndicatorCheckBox, QStyle.PrimitiveElement.PE_IndicatorItemViewItemCheck)
+    SWITCH_WIDTH = 28
+    SWITCH_HEIGHT = 16
 
     def __init__(self):
         super().__init__("Fusion")
 
+    def pixelMetric(self, metric, option=None, widget=None) -> int:
+        if tickStyle() == 'switch':
+            if metric == QStyle.PixelMetric.PM_IndicatorWidth:
+                return self.SWITCH_WIDTH
+            if metric == QStyle.PixelMetric.PM_IndicatorHeight:
+                return self.SWITCH_HEIGHT
+        return super().pixelMetric(metric, option, widget)
+
     def drawPrimitive(self, element, option, painter, widget=None) -> None:
+        if element in self.CHECKS and tickStyle() == 'switch':
+            self.drawSwitch(option, painter)
+            return
         if element in self.CHECKS and isDark(option.palette):
             self.drawDarkCheck(option, painter)
             return
@@ -254,4 +322,32 @@ class ManagerStyle(QProxyStyle):
             painter.setPen(QPen(QColor(STEEL['faint'] if enabled else STEEL['strong']), 1.5))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(box.adjusted(0.75, 0.75, -0.75, -0.75), 3, 3)
+        painter.restore()
+
+    @classmethod
+    def drawSwitch(cls, option, painter) -> None:
+        '''An on/off switch: the accent with the knob at the right when on, grey with it at the left when off'''
+        width = min(option.rect.width(), cls.SWITCH_WIDTH)
+        height = min(option.rect.height(), cls.SWITCH_HEIGHT)
+        track = QRectF(0, 0, width - 1, height - 1)
+        track.moveCenter(QRectF(option.rect).center())
+        enabled = bool(option.state & QStyle.StateFlag.State_Enabled)
+        on = bool(option.state & QStyle.StateFlag.State_On)
+        partly = bool(option.state & QStyle.StateFlag.State_NoChange)
+        dark = isDark(option.palette)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if not enabled:
+            painter.setOpacity(0.45)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(accentColor(option.palette) if on or partly else QColor('#3a414a' if dark else '#c5cdd8'))
+        painter.drawRoundedRect(track, track.height() / 2, track.height() / 2)
+        knob = track.height() - 4
+        left = track.left() + 2
+        if on:
+            left = track.right() - 2 - knob
+        elif partly:
+            left = track.center().x() - knob / 2
+        painter.setBrush(QColor(Qt.GlobalColor.white))
+        painter.drawEllipse(QRectF(left, track.top() + 2, knob, knob))
         painter.restore()

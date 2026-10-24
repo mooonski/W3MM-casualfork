@@ -303,8 +303,9 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(CustomMainWidget.modCategory(self.widget, self.mods["Plain"]), "")
         self.widget.getSelectedMods.return_value = ["HUD"]
         CustomMainWidget.updatePreview(self.widget)
-        mod, details, image, remastered = self.widget.preview.showMod.call_args.args
+        mod, details, image, remastered, sections = self.widget.preview.showMod.call_args.args
         self.assertEqual((mod.name, details.modId, image, remastered), ("HUD", 13130, "", True))
+        self.assertIs(sections, self.widget.previewSections.return_value)
         self.widget.getSelectedMods.return_value = []
         CustomMainWidget.updatePreview(self.widget)
         self.assertEqual(self.widget.preview.showMod.call_args.args[:2], (None, None))

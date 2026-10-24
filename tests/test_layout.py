@@ -203,10 +203,30 @@ class MainWindowLayoutTests(LayoutTestCase):
         self.assertEqual(header.visualIndex(16), header.visualIndex(2) + 1, "Contents comes after Priority")
         self.assertEqual([c for c in range(17) if header.isSectionHidden(c)], [3, 4, 5, 6, 7, 8, 9])
         toolbar = [action.iconText() for action in widget.toolBar.actions()]
-        self.assertIn("Health Check", toolbar)
+        self.assertNotIn("Health Check", toolbar, "it is on the section rail")
         self.assertIn("History", toolbar)
         self.assertIn("Folders", toolbar)
         self.assertIn("Config Files", toolbar)
+
+        # the section rail down the left replaces the tabs
+        self.assertFalse(widget.tabs.tabBar().isVisible())
+        rail = widget.rail
+        self.assertEqual(
+            list(rail.buttons),
+            ["mods", "downloads", "nexus", "loadorder", "health", "saves", "tools", "settings"],
+        )
+        self.assertTrue(rail.buttons["mods"].isChecked())
+        self.assertEqual(rectIn(rail, window).left(), 0)
+        self.assertLess(rectIn(rail, window).right(), rectIn(widget.tabs, window).left())
+        for button in rail.buttons.values():
+            self.assertInside(button, rail)
+        self.assertNoOverlap(list(rail.buttons.values()), rail)
+        rail.buttons["nexus"].click()
+        self.assertIs(widget.tabs.currentWidget(), widget.browse)
+        widget.tabs.setCurrentWidget(widget.downloads)
+        self.assertTrue(rail.buttons["downloads"].isChecked(), "the rail follows the page shown")
+        rail.buttons["mods"].click()
+        settle(self.app)
 
         # Script Merger and Play sit together at the right end of the toolbar row
         self.assertNoOverlap([widget.scriptMergerButton, widget.runGameButton], window)

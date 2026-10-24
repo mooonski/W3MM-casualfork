@@ -1,18 +1,33 @@
 '''The Steel skin: the style sheet, the Play button, the mod list's tags, badges and separators, and the filters'''
 
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QColor, QIcon, QImage
-from PySide6.QtWidgets import QApplication, QTreeWidget
+from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPalette
+from PySide6.QtWidgets import QApplication, QStyle, QStyleOptionButton, QStyleOptionViewItem, QTreeWidget
 
-from src.core.nexus import FAILED, UP_TO_DATE, UPDATE_AVAILABLE, UpdateCheck
+from src.core.nexus import FAILED, UP_TO_DATE, UPDATE_AVAILABLE, ModFiles, NexusFile, NexusInfo, UpdateCheck
+from src.core.nexusdetails import ModDetails, Requirement
+from src.core.requirements import MISSING, MissingRequirement
 from src.domain.mod import Mod
 from src.gui.icons import badgedIcon, icon
 from src.gui.main_widget import CONTENTS_COLUMN, UPDATE_COLUMN, CustomMainWidget, contentsTags, updateKind
-from src.gui.skin import GROUP_COUNT_ROLE, UPDATE_KIND_ROLE, ModListDelegate, PlayButton
-from src.gui.themes import STEEL, ManagerStyle, accentColor, get_dark_palette, get_light_palette, styleSheet
+from src.gui.skin import COMFORTABLE_HEIGHT, GROUP_COUNT_ROLE, UPDATE_KIND_ROLE, ModListDelegate, PlayButton
+from src.gui.themes import (
+    ACCENTS,
+    STEEL,
+    ManagerStyle,
+    accentColor,
+    accentName,
+    get_dark_palette,
+    get_light_palette,
+    setAccent,
+    setTickStyle,
+    statusColor,
+    styleSheet,
+    tickStyle,
+)
 from src.gui.tree_widget import CustomTreeWidgetItem, GroupItem
 
 
@@ -114,6 +129,154 @@ class SkinTests(unittest.TestCase):
             tree.resize(1200, 200)
             self.assertFalse(tree.grab().toImage().isNull())
             self.assertGreaterEqual(tree.visualItemRect(row).height(), 28)
+
+
+class AppearanceChoiceTests(unittest.TestCase):
+    '''Ice blue instead of red, switches instead of tick boxes, and comfortable rows with pictures'''
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def tearDown(self):
+        setAccent("red")
+        setTickStyle("box")
+
+    def test_accent_colour(self):
+        red = accentColor(get_dark_palette()).name()
+        setAccent("blue")
+        self.assertEqual(accentName(), "blue")
+        self.assertEqual(accentColor(get_dark_palette()).name(), ACCENTS["blue"]["accent"])
+        self.assertNotEqual(accentColor(get_dark_palette()).name(), red)
+        self.assertIn(ACCENTS["blue"]["accent"], styleSheet("Dark"))
+        self.assertNotIn(ACCENTS["red"]["accent"], styleSheet("Dark"))
+        self.assertEqual(get_dark_palette().color(QPalette.ColorRole.Highlight).name(), ACCENTS["blue"]["selection"])
+        self.assertEqual(statusColor("accent", get_dark_palette()).name(), ACCENTS["blue"]["accentText"])
+        setAccent("purple")  # unknown: back to red
+        self.assertEqual(accentName(), "red")
+
+    def test_white_text_is_readable_on_each_accent(self):
+        from tests.test_themes import contrast
+
+        for name, accent in ACCENTS.items():
+            for key in ("accent", "light"):
+                with self.subTest(accent=name, theme=key):
+                    self.assertGreaterEqual(contrast(QColor(accent[key]), QColor("white")), 4.5)
+
+    def test_switches(self):
+        style = ManagerStyle()
+        box = style.pixelMetric(QStyle.PixelMetric.PM_IndicatorWidth)
+        setTickStyle("switch")
+        self.assertEqual(style.pixelMetric(QStyle.PixelMetric.PM_IndicatorWidth), ManagerStyle.SWITCH_WIDTH)
+        self.assertGreater(ManagerStyle.SWITCH_WIDTH, box)
+        for palette in (get_dark_palette(), get_light_palette()):
+            for state, knobRight in ((QStyle.StateFlag.State_On, True), (QStyle.StateFlag.State_Off, False)):
+                with self.subTest(dark=palette is not None, on=knobRight):
+                    image = QImage(40, 20, QImage.Format.Format_ARGB32)
+                    image.fill(Qt.GlobalColor.transparent)
+                    painter = QPainter(image)
+                    option = QStyleOptionButton()
+                    option.rect = image.rect()
+                    option.palette = palette
+                    option.state = state | QStyle.StateFlag.State_Enabled
+                    style.drawPrimitive(QStyle.PrimitiveElement.PE_IndicatorCheckBox, option, painter)
+                    painter.end()
+                    white = [x for x in range(40) if QColor(image.pixel(x, 10)) == QColor("white")]
+                    self.assertTrue(white, "the knob is drawn")
+                    self.assertEqual(sum(white) / len(white) > 20, knobRight)
+        setTickStyle("wobbly")
+        self.assertEqual(tickStyle(), "box")
+
+    def test_comfortable_rows(self):
+        tree = QTreeWidget()
+        tree.setColumnCount(3)
+        delegate = ModListDelegate(tree, 2, 2)
+        tree.setItemDelegate(delegate)
+        heading = GroupItem("Visuals", 0)
+        tree.addTopLevelItem(heading)
+        row = CustomTreeWidgetItem(["", "Cat Hood Fix", ""])
+        heading.addChild(row)
+        heading.setExpanded(True)
+        option = QStyleOptionViewItem()
+        compact = delegate.sizeHint(option, tree.indexFromItem(row, 1)).height()
+        delegate.setComfortable(True)
+        self.assertEqual(delegate.sizeHint(option, tree.indexFromItem(row, 1)).height(), COMFORTABLE_HEIGHT)
+        self.assertLess(compact, COMFORTABLE_HEIGHT)
+        self.assertLess(delegate.sizeHint(option, tree.indexFromItem(heading, 0)).height(), COMFORTABLE_HEIGHT)
+        self.assertEqual(ModListDelegate.initials("[MOD.IO] Ciri E3 Scabbard"), "CE")
+        self.assertEqual(ModListDelegate.initials("Cat Hood Fix"), "CH")
+        self.assertIsNone(delegate.picture(""))
+        self.assertIsNone(delegate.picture("missing.png"))
+        tree.resize(500, 200)
+        self.assertFalse(tree.grab().toImage().isNull())
+
+
+class PreviewSectionTests(unittest.TestCase):
+    '''What the details pane's Files, Changelog and Requirements tabs say about an installed mod'''
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self.mod = Mod()
+        self.mod._name = "The Living Continent"
+        self.mod.files = ["modW3LivingSky"]
+        self.mod.menus = ["mod00LivingContinent.xml"]
+        self.mod.bins = ["x64_dx12/W3LivingSky.addon64"]
+        self.mod.inputsettings = [Mock(), Mock()]
+        self.mod.nexus = NexusInfo(13650, 2, "1.4.0")
+        self.widget = Mock()
+        self.widget.updateChecks = {}
+
+    def test_files(self):
+        text = CustomMainWidget.filesHtml(self.mod)
+        for expected in (
+            "modW3LivingSky",
+            "mod00LivingContinent.xml",
+            "x64_dx12/W3LivingSky.addon64",
+            "2 key bindings",
+        ):
+            self.assertIn(expected, text)
+        self.assertNotIn("DLC folder", text)
+        self.assertIn("No files", CustomMainWidget.filesHtml(Mod()))
+
+    def test_changelog(self):
+        self.assertIn("comes from Nexus", CustomMainWidget.changelogHtml(self.widget, self.mod))
+        installed = NexusFile(2, "Main", "1.4.0", "MAIN", True, 100, "a.zip", 1, changelog="Fixed fog")
+        newer = NexusFile(3, "Main", "1.5", "MAIN", True, 200, "b.zip", 1, changelog="Snow<br>Rain")
+        files = ModFiles({2: installed, 3: newer}, {2: 3})
+        self.widget.updateChecks = {self.mod.name: UpdateCheck(UPDATE_AVAILABLE, installed, newer, files=files)}
+        text = CustomMainWidget.changelogHtml(self.widget, self.mod)
+        self.assertIn("v1.5", text)
+        self.assertIn("Snow", text)
+        self.assertNotIn("Fixed fog", text, "only the changes after the installed file")
+        self.widget.updateChecks = {self.mod.name: UpdateCheck(UP_TO_DATE, installed, files=files)}
+        text = CustomMainWidget.changelogHtml(self.widget, self.mod)
+        self.assertIn("Fixed fog", text, "the installed file's own changes")
+        unlinked = Mod()
+        self.assertIn("Not linked", CustomMainWidget.changelogHtml(self.widget, unlinked))
+
+    def test_requirements(self):
+        self.widget.model = Mock()
+        self.widget.nexusDetails = Mock()
+        self.assertIn("been loaded yet", CustomMainWidget.requirementsHtml(self.widget, self.mod, None))
+        details = ModDetails(13650, "The Living Continent")
+        self.assertIn("no requirements", CustomMainWidget.requirementsHtml(self.widget, self.mod, details))
+        details.requirements = [
+            Requirement("Sharedutils", modId=6000, gameId=952),
+            Requirement("ReShade", external=True, notes="bin&#92;x64_dx12"),
+        ]
+        missing = [MissingRequirement(self.mod.name, details.requirements[0], MISSING)]
+        with (
+            patch("src.gui.main_widget.missingRequirements", return_value=missing),
+            patch("src.gui.main_widget.data.config", Mock(dlc="")),
+        ):
+            text = CustomMainWidget.requirementsHtml(self.widget, self.mod, details)
+        self.assertIn("Sharedutils", text)
+        self.assertIn("not installed", text)
+        self.assertIn("ReShade", text)
+        self.assertIn("bin\\x64_dx12", text, "Nexus's escaped characters are shown as themselves")
 
 
 if __name__ == "__main__":

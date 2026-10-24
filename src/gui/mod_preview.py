@@ -1,11 +1,23 @@
-'''Preview of the selected mod: picture and details from Nexus'''
+'''Preview of the selected mod: picture and details from Nexus, and for installed mods its files, changelog and
+requirements on tabs'''
 
 import html
 import time
+from dataclasses import dataclass, field
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QFrame, QLabel, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QStackedWidget,
+    QTabBar,
+    QVBoxLayout,
+    QWidget,
+)
 
 from src.core.nexusdetails import ModDetails
 from src.domain.mod import Mod
@@ -14,11 +26,39 @@ from src.gui.themes import statusColor
 
 IMAGE_HEIGHT = 130
 
+DETAILS_TAB, FILES_TAB, CHANGELOG_TAB, REQUIREMENTS_TAB = range(4)
+
+
+@dataclass
+class PreviewSections:
+    '''What the tabs show for an installed mod; the texts are HTML'''
+
+    facts: list[tuple[str, str]] = field(default_factory=list)
+    files: str = ''
+    changelog: str = ''
+    # the changelog can be fetched from Nexus (the Load Changelog button shows)
+    changelogLoadable: bool = False
+    requirements: str = ''
+
+
+def factsHtml(facts: list[tuple[str, str]]) -> str:
+    '''Label and value pairs as a two-column table'''
+    muted = statusColor('muted').name()
+    rows = ''.join(
+        f'<tr><td style="color:{muted}; padding:2px 14px 2px 0">{html.escape(label)}</td>'
+        f'<td style="padding:2px 0">{html.escape(value)}</td></tr>'
+        for label, value in facts
+    )
+    return f'<table cellspacing="0" cellpadding="0">{rows}</table>' if rows else ''
+
 
 class ModPreview(QWidget):
+    changelogWanted = Signal()
+
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("modPreview")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setMinimumWidth(200)
         # the details scroll when the panel is short, instead of being squeezed on top of each other
         outer = QVBoxLayout(self)
@@ -31,35 +71,118 @@ class ModPreview(QWidget):
         content = QWidget(self.scroll)
         self.scroll.setWidget(content)
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(6)
         self.image = QLabel(content)
         self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image.setMinimumHeight(0)
         self.image.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.title = QLabel(content)
+        self.title.setObjectName("previewTitle")
         self.title.setWordWrap(True)
         self.title.setStyleSheet("font-weight: bold;")
         self.meta = QLabel(content)
+        self.meta.setObjectName("previewMeta")
         self.meta.setWordWrap(True)
         self.warning = QLabel(content)
         self.warning.setWordWrap(True)
-        self.summary = QLabel(content)
+        for widget in (self.image, self.title, self.meta, self.warning):
+            layout.addWidget(widget)
+
+        # Details, Files, Changelog, Requirements: only for installed mods
+        self.tabs = QTabBar(content)
+        self.tabs.setObjectName("previewTabs")
+        self.tabs.setExpanding(False)
+        self.tabs.setDrawBase(False)
+        self.tabs.setDocumentMode(True)
+        for label in (
+            translate("Preview", "Details"),
+            translate("Preview", "Files"),
+            translate("Preview", "Changelog"),
+            translate("Preview", "Requirements"),
+        ):
+            self.tabs.addTab(label)
+        self.tabs.setVisible(False)
+        layout.addWidget(self.tabs)
+        self.pages = QStackedWidget(content)
+        self.tabs.currentChanged.connect(self.pages.setCurrentIndex)
+        layout.addWidget(self.pages)
+
+        details = QWidget(self.pages)
+        detailsLayout = QVBoxLayout(details)
+        detailsLayout.setContentsMargins(0, 4, 0, 0)
+        self.summary = QLabel(details)
         self.summary.setWordWrap(True)
         self.summary.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        self.link = QLabel(content)
+        self.link = QLabel(details)
         self.link.setOpenExternalLinks(True)
         self.link.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
-        for widget in (self.image, self.title, self.meta, self.warning, self.summary, self.link):
-            layout.addWidget(widget)
+        self.facts = self.richLabel(details)
+        for widget in (self.summary, self.link, self.facts):
+            detailsLayout.addWidget(widget)
+        detailsLayout.addStretch(1)
+        self.pages.addWidget(details)
+
+        self.files = self.page(self.richLabel(None))
+        changelog = QWidget(self.pages)
+        changelogLayout = QVBoxLayout(changelog)
+        changelogLayout.setContentsMargins(0, 4, 0, 0)
+        self.changelog = self.richLabel(changelog)
+        self.loadChangelog = QPushButton(translate("Preview", "Load Changelog"), changelog)
+        self.loadChangelog.setToolTip(translate("Preview", "Ask Nexus for this mod's files and their changelogs"))
+        self.loadChangelog.clicked.connect(lambda: self.changelogWanted.emit())
+        changelogLayout.addWidget(self.changelog)
+        changelogLayout.addWidget(self.loadChangelog, 0, Qt.AlignmentFlag.AlignLeft)
+        changelogLayout.addStretch(1)
+        self.pages.addWidget(changelog)
+        self.requirements = self.page(self.richLabel(None))
+        # the pages are as tall as the shown one, not the tallest
+        self.pages.currentChanged.connect(self.fitPage)
+
         layout.addStretch(1)
         self.pixmap = QPixmap()
         self.showMod(None, None, '')
 
-    def showMod(self, mod: Mod | None, details: ModDetails | None, image: str, remastered: bool = False) -> None:
-        '''Shows a mod; remastered says whether the game is Remastered, to flag mods not updated for it'''
+    @staticmethod
+    def richLabel(parent: QWidget | None) -> QLabel:
+        label = QLabel(parent)
+        label.setWordWrap(True)
+        label.setTextFormat(Qt.TextFormat.RichText)
+        label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        label.setOpenExternalLinks(True)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        return label
+
+    def page(self, label: QLabel) -> QLabel:
+        holder = QWidget(self.pages)
+        holderLayout = QVBoxLayout(holder)
+        holderLayout.setContentsMargins(0, 4, 0, 0)
+        label.setParent(holder)
+        holderLayout.addWidget(label)
+        holderLayout.addStretch(1)
+        self.pages.addWidget(holder)
+        return label
+
+    def fitPage(self, index: int) -> None:
+        for page in range(self.pages.count()):
+            policy = QSizePolicy.Policy.Preferred if page == index else QSizePolicy.Policy.Ignored
+            self.pages.widget(page).setSizePolicy(QSizePolicy.Policy.Preferred, policy)
+        self.pages.adjustSize()
+
+    def showMod(
+        self,
+        mod: Mod | None,
+        details: ModDetails | None,
+        image: str,
+        remastered: bool = False,
+        sections: PreviewSections | None = None,
+    ) -> None:
+        '''Shows a mod; remastered says whether the game is Remastered, to flag mods not updated for it. Installed
+        mods come with sections for the Files, Changelog and Requirements tabs.'''
         self.pixmap = QPixmap(image) if image else QPixmap()
         self.updateImage()
         self.warning.setText('')
+        self.showSections(sections)
         if mod is None:
             self.title.setText(translate("Preview", "Select a mod to see its details"))
             self.meta.setText('')
@@ -67,7 +190,7 @@ class ModPreview(QWidget):
             self.link.setText('')
             return
         if details is not None:
-            self.showDetails(details, image, remastered)
+            self.showDetails(details, image, remastered, sections)
             return
         self.title.setText(mod.name)
         self.meta.setText('')
@@ -78,11 +201,30 @@ class ModPreview(QWidget):
         )
         self.link.setText(self.anchor(mod.nexus.url) if mod.nexus and mod.nexus.modId else '')
 
-    def showDetails(self, details: ModDetails, image: str, remastered: bool = False) -> None:
+    def showSections(self, sections: PreviewSections | None) -> None:
+        self.tabs.setVisible(sections is not None)
+        if sections is None:
+            self.tabs.setCurrentIndex(DETAILS_TAB)
+            self.pages.setCurrentIndex(DETAILS_TAB)
+            self.facts.setText('')
+            self.fitPage(DETAILS_TAB)
+            return
+        self.facts.setText(factsHtml(sections.facts))
+        self.files.setText(sections.files)
+        self.changelog.setText(sections.changelog)
+        self.loadChangelog.setVisible(sections.changelogLoadable)
+        self.requirements.setText(sections.requirements)
+        self.fitPage(self.pages.currentIndex())
+
+    def showDetails(
+        self, details: ModDetails, image: str, remastered: bool = False, sections: PreviewSections | None = None
+    ) -> None:
         '''Shows a mod from Nexus, installed or not'''
         self.pixmap = QPixmap(image) if image else QPixmap()
         self.updateImage()
         self.warning.setText('')
+        if sections is None:
+            self.showSections(None)
         self.title.setText(details.name)
         version = details.version if not details.version or details.version[:1] in 'vV' else 'v' + details.version
         updated = time.strftime('%Y-%m-%d', time.gmtime(details.updated)) if details.updated else ''
@@ -108,7 +250,7 @@ class ModPreview(QWidget):
             self.image.clear()
             self.image.setFixedHeight(0)
             return
-        width = max(50, self.scroll.viewport().width() - 8)
+        width = max(50, self.scroll.viewport().width() - 20)
         scaled = self.pixmap.scaled(
             width, IMAGE_HEIGHT, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
         )

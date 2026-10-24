@@ -1,5 +1,6 @@
 '''Main Widget'''
 
+import html
 import os
 import shlex
 import shutil
@@ -88,6 +89,7 @@ from src.core.nexus import (
     NexusFile,
     NexusInfo,
     UpdateCheck,
+    changesBetween,
     checkForUpdate,
     parseArchiveName,
     parseModReference,
@@ -95,7 +97,7 @@ from src.core.nexus import (
 )
 from src.core.nexusdetails import DetailsCache, ModDetails, NexusGraphQL, remasteredSuggestions
 from src.core.nxm import NxmLink, NxmRegistration, WindowsRegistry, forward, handlerName, parseNxm
-from src.core.requirements import EXTERNAL, missingRequirements
+from src.core.requirements import DISABLED, DLC_MISSING, EXTERNAL, MISSING, missingRequirements
 from src.core.rmmr import RmmrError, applyImport, isRmmrFolder, planImport
 from src.core.saves import SaveBackup, backupSaves, gameSavesFolder, listSaveBackups, restoreSaves
 from src.core.scriptmerger import (
@@ -140,7 +142,7 @@ from src.gui.history_dialog import DownloadHistoryDialog
 from src.gui.icons import badgedIcon, icon
 from src.gui.load_order_tree import LoadOrderTree
 from src.gui.manager_update_dialog import INSTALL, OPEN_PAGE, ManagerUpdateDialog
-from src.gui.mod_preview import ModPreview
+from src.gui.mod_preview import ModPreview, PreviewSections
 from src.gui.nexus_dialogs import (
     SWITCH,
     BackupsDialog,
@@ -150,8 +152,10 @@ from src.gui.nexus_dialogs import (
     UpdateRow,
     UpdatesDialog,
     askApiKey,
+    linkify,
     statusText,
 )
+from src.gui.rail import SectionRail
 from src.gui.requirements_dialog import RequirementsDialog
 from src.gui.reshade_dialog import ReShadeDialog
 from src.gui.saves_dialog import SaveBackupsDialog
@@ -160,8 +164,26 @@ from src.gui.scriptmerger_dialog import UPDATE as SM_UPDATE
 from src.gui.scriptmerger_dialog import MessageAlertScriptConflicts, ScriptConflictsDialog, askScriptMergerUpdate
 from src.gui.settings_dialog import KEYS_TAB, USER_TAB, GameSettingsDialog
 from src.gui.setup_dialog import SetupDialog
-from src.gui.skin import GROUP_COUNT_ROLE, UPDATE_KIND_ROLE, ModListDelegate, PlayButton
-from src.gui.themes import get_dark_palette, get_light_palette, get_system_palette, statusColor, styleSheet
+from src.gui.skin import (
+    GROUP_COUNT_ROLE,
+    PICTURE_ROLE,
+    SUBTITLE_ROLE,
+    UPDATE_KIND_ROLE,
+    ModListDelegate,
+    PlayButton,
+)
+from src.gui.themes import (
+    ManagerStyle,
+    accentName,
+    get_dark_palette,
+    get_light_palette,
+    get_system_palette,
+    setAccent,
+    setTickStyle,
+    statusColor,
+    styleSheet,
+    tickStyle,
+)
 from src.gui.tree_widget import (
     GROUP_ROLE,
     MODIO_ROLE,
@@ -296,6 +318,7 @@ class CustomMainWidget(QWidget):
         self.translateUi()
         self.configureUi()
         self.configureToolbar()
+        self.configureRail()
         self.restoreWindowState()
         self.checkLanguage()
         self.checkTheme()
@@ -450,7 +473,14 @@ class CustomMainWidget(QWidget):
         self.contentLayout = QVBoxLayout()
         self.contentLayout.setContentsMargins(12, 10, 12, 10)
         self.contentLayout.setSpacing(8)
-        self.verticalLayout_2.addLayout(self.contentLayout, 1)
+        # the section buttons down the left, filled in by configureRail once the actions exist
+        self.bodyRow = QHBoxLayout()
+        self.bodyRow.setContentsMargins(0, 0, 0, 0)
+        self.bodyRow.setSpacing(0)
+        self.rail = SectionRail(self.centralwidget)
+        self.bodyRow.addWidget(self.rail)
+        self.bodyRow.addLayout(self.contentLayout, 1)
+        self.verticalLayout_2.addLayout(self.bodyRow, 1)
 
         # Tabs: the installed mods, and browsing Nexus
         self.tabs = QTabWidget(self.centralwidget)
@@ -522,7 +552,8 @@ class CustomMainWidget(QWidget):
         self.treeWidget.setHeaderHidden(False)
         self.treeWidget.setColumnCount(CONTENTS_COLUMN + 1)
         self.treeWidget.setObjectName("treeWidget")
-        self.treeWidget.setItemDelegate(ModListDelegate(self.treeWidget, CONTENTS_COLUMN, UPDATE_COLUMN))
+        self.listDelegate = ModListDelegate(self.treeWidget, CONTENTS_COLUMN, UPDATE_COLUMN)
+        self.treeWidget.setItemDelegate(self.listDelegate)
         self.treeWidget.setAlternatingRowColors(True)
         self.treeWidget.header().setCascadingSectionResizes(True)
         self.treeWidget.header().setHighlightSections(False)
@@ -550,6 +581,7 @@ class CustomMainWidget(QWidget):
         # Configure splitter
         # the preview of the selected mod sits above the load order
         self.preview = ModPreview(self.centralwidget)
+        self.preview.changelogWanted.connect(self.loadChangelog)
         self.verticalSplitter_right = QSplitter(Qt.Orientation.Vertical)
         self.verticalSplitter_right.setObjectName("verticalSplitter_right")
         self.verticalSplitter_right.setHandleWidth(10)
@@ -643,6 +675,8 @@ class CustomMainWidget(QWidget):
             header.setSectionHidden(column, True)
 
         self.resizeColumns()
+        self.applyRowSize()
+        self.fitTickColumn()
 
         self.actionInstall_Mods.triggered.connect(self.installMods)
         self.actionUninstall_Mods.triggered.connect(self.uninstallMods)
@@ -788,7 +822,7 @@ class CustomMainWidget(QWidget):
         self.toolBar.addAction(self.actionCheckUpdates)
         self.toolBar.addAction(self.actionUpdateMods)
         self.toolBar.addSeparator()
-        self.toolBar.addAction(self.actionHealthCheck)
+        # Health Check is on the section rail, with its count
         self.toolBar.addAction(self.actionDownloadHistory)
         self.actionRefresh_Mod_List.setToolTip(
             translate("MainWindow", "Read mods.settings and the mods again, e.g. after editing them outside (F5)")
@@ -840,6 +874,81 @@ class CustomMainWidget(QWidget):
         self.actionAddToToolbar.triggered.connect(self.addToToolbar)
         self.actionAddToToolbar.setText(translate("MainWindow", "Add New.."))
         self.measureToolbar()
+
+    def configureRail(self) -> None:
+        '''The section buttons: the three pages instead of tabs, then places that open something'''
+        rail = self.rail
+        rail.addPage("mods", translate("MainWindow", "Mods"), "grid", translate("MainWindow", "The installed mods"))
+        rail.addPage(
+            "downloads",
+            translate("MainWindow", "Archives"),
+            "inbox",
+            translate("MainWindow", "Downloaded archives that aren't installed"),
+        )
+        rail.addPage("nexus", translate("MainWindow", "Nexus"), "globe", translate("MainWindow", "Browse Nexus"))
+        rail.addPlace(
+            "loadorder",
+            translate("MainWindow", "Load Order"),
+            "order",
+            translate("MainWindow", "The load order beside the mod list (mods.settings)"),
+            self.showLoadOrderFromRail,
+        )
+        rail.addPlace(
+            "health",
+            translate("MainWindow", "Health"),
+            "health",
+            translate("MainWindow", "Look for problems with the installed mods (F9)"),
+            self.showHealthCheck,
+        )
+        rail.addPlace(
+            "saves",
+            translate("MainWindow", "Saves"),
+            "save",
+            translate("MainWindow", "Copies of your newest saves, made before updates"),
+            self.showSaveBackups,
+        )
+        tools = QMenu(self.mainWindow)
+        for action in (
+            self.actionRun_Script_Merger,
+            self.actionUpdateScriptMerger,
+            self.actionScriptConflicts,
+            self.actionFileConflicts,
+            None,
+            self.actionReShade,
+            self.actionGameSettings,
+        ):
+            if action is None:
+                tools.addSeparator()
+            else:
+                tools.addAction(action)
+        rail.addMenu(
+            "tools",
+            translate("MainWindow", "Tools"),
+            "tools",
+            translate("MainWindow", "Script Merger, conflicts, ReShade and game settings"),
+            tools,
+        )
+        rail.addStretch()
+        rail.addMenu("settings", translate("MainWindow", "Settings"), "sliders", "", self.menuSettings)
+        rail.pageChosen.connect(self.showPage)
+        self.tabs.tabBar().hide()
+        self.tabs.currentChanged.connect(lambda _: rail.setCurrent(self.pageKey()))
+        rail.setCurrent(self.pageKey())
+        rail.setBadge("health", self.healthCount, statusColor("warning"))
+
+    def pageWidgets(self) -> dict:
+        return {"mods": self.installedTab, "downloads": self.downloads, "nexus": self.browse}
+
+    def pageKey(self) -> str:
+        current = self.tabs.currentWidget()
+        return next((key for key, page in self.pageWidgets().items() if page is current), "mods")
+
+    def showPage(self, key: str) -> None:
+        self.tabs.setCurrentWidget(self.pageWidgets()[key])
+
+    def showLoadOrderFromRail(self) -> None:
+        self.showPage("mods")
+        self.showLoadOrderPanel()
 
     def measureToolbar(self) -> None:
         '''How wide the toolbar is with its labels, to drop them when the window is too narrow (see fitToolbar)'''
@@ -2856,12 +2965,165 @@ class CustomMainWidget(QWidget):
         details = self.modDetails(mod)
         return details.category if details else ""
 
+    def showPicture(self, row, mod: Mod) -> None:
+        '''The mod's Nexus picture and a line about it, shown when the list has comfortable rows'''
+        details = self.modDetails(mod)
+        row.setData(1, PICTURE_ROLE, self.nexusDetails.image(details))
+        parts = [self.modCategory(mod)]
+        if details is not None and details.author:
+            parts.append(details.author)
+        version = mod.nexus.version if mod.nexus and mod.nexus.version else ""
+        if version:
+            parts.append(version if version[:1] in "vV" else "v" + version)
+        row.setData(1, SUBTITLE_ROLE, " · ".join(part for part in parts if part))
+
     def updatePreview(self) -> None:
         selected = self.getSelectedMods()
         mod = self.model.modList.get(selected[0]) if selected else None
         details = self.modDetails(mod) if mod is not None else None
         remastered = data.getConfig().gameversion == "re"
-        self.preview.showMod(mod, details, self.nexusDetails.image(details), remastered)
+        sections = self.previewSections(mod, details) if mod is not None else None
+        self.preview.showMod(mod, details, self.nexusDetails.image(details), remastered, sections)
+
+    def previewSections(self, mod: Mod, details: ModDetails | None) -> PreviewSections:
+        '''What the preview's Details, Files, Changelog and Requirements tabs show for an installed mod'''
+        none = translate("MainWindow", "none")
+        facts = [
+            (translate("MainWindow", "Installed"), str(mod.date or "")),
+            (translate("MainWindow", "Version"), mod.nexus.version if mod.nexus and mod.nexus.version else "-"),
+            (
+                translate("MainWindow", "Priority"),
+                str(mod.priority) if priorityNumber(mod.priority) is not None else none,
+            ),
+            (translate("MainWindow", "Separator"), mod.group or none),
+            (translate("MainWindow", "Contents"), contentsTags(mod).replace(" ", ", ") or none),
+        ]
+        if mod.nexus and mod.nexus.modId:
+            facts.append((translate("MainWindow", "Nexus ID"), str(mod.nexus.modId)))
+        return PreviewSections(
+            facts=[(label, value) for label, value in facts if value],
+            files=self.filesHtml(mod),
+            changelog=self.changelogHtml(mod),
+            changelogLoadable=bool(mod.nexus and mod.nexus.modId) and not self.nexusBusy(),
+            requirements=self.requirementsHtml(mod, details),
+        )
+
+    @staticmethod
+    def filesHtml(mod: Mod) -> str:
+        '''What the mod put where, grouped by folder'''
+        groups = [
+            (translate("MainWindow", "Mods folder"), mod.files),
+            (translate("MainWindow", "DLC folder"), mod.dlcs),
+            (translate("MainWindow", "Menus"), mod.menus),
+            (translate("MainWindow", "Game folder (bin)"), mod.bins),
+        ]
+        parts = []
+        for label, names in groups:
+            if names:
+                items = "".join(f"<li>{html.escape(str(name))}</li>" for name in names)
+                parts.append(
+                    f"<p style='margin:6px 0 2px'><b>{html.escape(label)}</b></p><ul style='margin:0'>{items}</ul>"
+                )
+        counts = [
+            (
+                len(mod.xmlkeys) + len(mod.hidden),
+                translate("MainWindow", "menu entry"),
+                translate("MainWindow", "menu entries"),
+            ),
+            (len(mod.inputsettings), translate("MainWindow", "key binding"), translate("MainWindow", "key bindings")),
+            (len(mod.usersettings), translate("MainWindow", "setting"), translate("MainWindow", "settings")),
+        ]
+        added = [plural(count, one, many) for count, one, many in counts if count]
+        if added:
+            parts.append(
+                "<p style='margin:6px 0 2px'>"
+                + html.escape(translate("MainWindow", "Adds") + " " + ", ".join(added))
+                + "</p>"
+            )
+        return "".join(parts) or html.escape(translate("MainWindow", "No files recorded for this mod."))
+
+    def changelogHtml(self, mod: Mod) -> str:
+        '''The changes up to the newest file when an update check has loaded the files, else how to get them'''
+        if not (mod.nexus and mod.nexus.modId):
+            return html.escape(translate("MainWindow", "Not linked to Nexus, so there's no changelog to show."))
+        check = self.updateChecks.get(mod.name)
+        if check is None or check.files is None:
+            return html.escape(translate("MainWindow", "The changelog comes from Nexus with the mod's files."))
+        target = check.target if check.state == UPDATE_AVAILABLE and check.target else check.installed
+        if target is None:
+            return html.escape(
+                translate("MainWindow", "The installed file isn't known, so its changelog can't be found.")
+            )
+        installed = check.installed if check.installed is not target else None
+        changes = changesBetween(check.files, installed, target)
+        parts = []
+        if check.state == UPDATE_AVAILABLE:
+            parts.append("<p><i>" + html.escape(translate("MainWindow", "Changes in the update:")) + "</i></p>")
+        for version, lines in changes:
+            heading = version if version.lower().startswith("v") or not version[:1].isdigit() else "v" + version
+            items = "".join(f"<li>{linkify(line)}</li>" for line in lines)
+            parts.append(
+                f"<p style='margin:6px 0 2px'><b>{html.escape(heading)}</b></p><ul style='margin:0'>{items}</ul>"
+            )
+        if not changes:
+            parts.append(html.escape(translate("MainWindow", "The author didn't write a changelog for this file.")))
+        parts.append(
+            f"<p><a href='{html.escape(mod.nexus.url)}?tab=logs'>"
+            + html.escape(translate("MainWindow", "All changes on Nexus"))
+            + "</a></p>"
+        )
+        return "".join(parts)
+
+    def requirementsHtml(self, mod: Mod, details: ModDetails | None) -> str:
+        '''What the mod's Nexus page says it needs, and whether each one is there'''
+        if details is None:
+            if mod.nexus and mod.nexus.modId:
+                return html.escape(
+                    translate("MainWindow", "Nexus details haven't been loaded yet (Nexus > Refresh Nexus Details).")
+                )
+            return html.escape(translate("MainWindow", "Not linked to Nexus, so its requirements aren't known."))
+        if not details.requirements:
+            return html.escape(translate("MainWindow", "Its Nexus page lists no requirements."))
+        try:
+            problems = missingRequirements(self.model, self.nexusDetails.get, data.getConfig().dlc or "", [mod.name])
+        except OSError:
+            problems = []
+        states = {
+            (problem.requirement.name.casefold(), problem.requirement.modId): problem.state for problem in problems
+        }
+        wording = {
+            MISSING: (translate("MainWindow", "not installed"), "problem"),
+            DISABLED: (translate("MainWindow", "installed but disabled"), "warning"),
+            DLC_MISSING: (translate("MainWindow", "expansion not installed"), "problem"),
+            EXTERNAL: (translate("MainWindow", "outside Nexus, not checked"), "muted"),
+        }
+        items = []
+        seen = set()
+        for requirement in details.requirements:
+            key = (requirement.name.casefold(), requirement.modId)
+            if key in seen:
+                continue
+            seen.add(key)
+            text, kind = wording.get(states.get(key, ""), (translate("MainWindow", "installed"), "ok"))
+            name = html.escape(html.unescape(requirement.name))
+            url = requirement.pageUrl
+            if url:
+                name = f"<a href='{html.escape(url)}'>{name}</a>"
+            note = (
+                f"<br><span style='color:{statusColor('muted').name()}'>{html.escape(html.unescape(requirement.notes))}</span>"
+                if requirement.notes
+                else ""
+            )
+            items.append(
+                f"<li>{name} <span style='color:{statusColor(kind).name()}'>({html.escape(text)})</span>{note}</li>"
+            )
+        return "<ul style='margin:0'>" + "".join(items) + "</ul>"
+
+    def loadChangelog(self) -> None:
+        '''Checks the selected mod on Nexus so its files and their changelogs are known'''
+        selected = self.getSelectedMods()
+        if selected:
+            self.checkForUpdates(names=[selected[0]], showDialog=False)
 
     def refreshNexusDetails(
         self, silent: bool = False, onlyMissing: bool = False, modIds: list[int] | None = None
@@ -2973,6 +3235,7 @@ class CustomMainWidget(QWidget):
         index = self.tabs.indexOf(self.downloads)
         label = translate("MainWindow", "Not Installed")
         self.tabs.setTabText(index, f"{label} ({count})" if count else label)
+        self.rail.setBadge("downloads", count, statusColor("update"))
 
     def downloadDetailsWanted(self, modIds: list[int]) -> None:
         '''Loads the Nexus names and pictures of downloaded mods, once a session for each'''
@@ -3335,6 +3598,7 @@ class CustomMainWidget(QWidget):
                     contents=contentsTags(mod),
                 )
                 row.setData(UPDATE_COLUMN, UPDATE_KIND_ROLE, updateKind(self.updateChecks.get(mod.name)))
+                self.showPicture(row, mod)
                 self.showEndorsement(row, mod)
                 if mod.name in duplicates:
                     row.setForeground(1, QBrush(statusColor("warning")))
@@ -3623,6 +3887,7 @@ class CustomMainWidget(QWidget):
                 parent=parent,
             )
             self.showModio(row, modio)
+            row.setData(1, SUBTITLE_ROLE, " · ".join(part for part in ("mod.io", modio.author, modio.version) if part))
 
     def showModio(self, row, modio: ModioMod) -> None:
         # marked first, so the changes below (each one signals itemChanged) are never taken for a mod being toggled
@@ -3982,6 +4247,7 @@ class CustomMainWidget(QWidget):
         )
         self.healthChip.setToolTip(translate("MainWindow", "Open the health check (F9)"))
         self.healthChip.setVisible(bool(issues))
+        self.rail.setBadge("health", len(issues), statusColor("warning"))
         self.applyIcons()
 
     def modVersions(self) -> dict[str, tuple[int, str]]:
@@ -4042,7 +4308,46 @@ class CustomMainWidget(QWidget):
         self.configureToolbar()
         self.searchAction.setIcon(icon("search"))
         self.forkLabel.setStyleSheet(f"color: {statusColor('muted').name()};")
+        self.rail.applyIcons()
         self.refreshList()
+
+    def changeAccent(self, name: str) -> None:
+        '''Red or ice blue for Play, ticks, the selection and the active tab'''
+        setAccent(name)
+        data.getConfig().set("SETTINGS", "accent", accentName())
+        self.changeTheme(data.getConfig().theme)
+
+    def changeTicks(self, name: str) -> None:
+        '''Tick boxes or on/off switches; the style measures them, so it is set again'''
+        setTickStyle(name)
+        data.getConfig().set("SETTINGS", "ticks", tickStyle())
+        app = data.getApp()
+        app.setStyle(ManagerStyle())
+        self.changeTheme(data.getConfig().theme)
+        self.fitTickColumn()
+
+    def fitTickColumn(self) -> None:
+        '''The Enabled column wide enough for a switch in a row under a separator (indented twice)'''
+        tick = ManagerStyle.SWITCH_WIDTH if tickStyle() == "switch" else 16
+        wanted = self.treeWidget.indentation() * 2 + tick + 14
+        if self.treeWidget.header().sectionSize(0) < wanted:
+            self.treeWidget.header().resizeSection(0, wanted)
+
+    def changeRowSize(self, name: str) -> None:
+        '''Compact rows, or taller ones with each mod's picture and a second line'''
+        data.getConfig().set("WINDOW", "rowsize", name)
+        self.applyRowSize()
+        self.refreshList(False)
+
+    def applyRowSize(self) -> None:
+        comfortable = data.getConfig().get("WINDOW", "rowsize") == "comfortable"
+        self.listDelegate.setComfortable(comfortable)
+        # separators stay short when the rows are tall
+        self.treeWidget.setUniformRowHeights(not comfortable)
+        # the name needs room beside the picture
+        if comfortable and self.treeWidget.header().sectionSize(1) < 300:
+            self.treeWidget.header().resizeSection(1, 300)
+        self.treeWidget.doItemsLayout()
 
     def checkTheme(self):
         theme = data.getConfig().theme
@@ -4050,6 +4355,14 @@ class CustomMainWidget(QWidget):
             if action.text() == theme:
                 action.setChecked(True)
                 break
+        chosen = {
+            "accent": accentName(),
+            "ticks": tickStyle(),
+            "rowsize": data.getConfig().get("WINDOW", "rowsize") or "compact",
+        }
+        for key, group in self.appearanceGroups.items():
+            for action in group.actions():
+                action.setChecked(action.data() == chosen[key])
 
     def createActions(self):
         '''Create all action objects'''
@@ -4257,6 +4570,40 @@ class CustomMainWidget(QWidget):
             self.themeActionGroup.addAction(action)
             self.menuSelect_Theme.addAction(action)
 
+        # appearance choices: (menu, config key, [(value, label)], what to do)
+        self.appearanceGroups: dict[str, QActionGroup] = {}
+        for menu, key, choices, apply in (
+            (
+                self.menuAccent,
+                "accent",
+                [("red", translate("MainWindow", "Red")), ("blue", translate("MainWindow", "Ice Blue"))],
+                self.changeAccent,
+            ),
+            (
+                self.menuTicks,
+                "ticks",
+                [("box", translate("MainWindow", "Tick Boxes")), ("switch", translate("MainWindow", "Switches"))],
+                self.changeTicks,
+            ),
+            (
+                self.menuRowSize,
+                "rowsize",
+                [
+                    ("compact", translate("MainWindow", "Compact")),
+                    ("comfortable", translate("MainWindow", "Comfortable, with Pictures")),
+                ],
+                self.changeRowSize,
+            ),
+        ):
+            group = QActionGroup(self.mainWindow)
+            for value, label in choices:
+                action = QAction(label, self.mainWindow, checkable=True)
+                action.setData(value)
+                action.triggered.connect(lambda _, v=value, a=apply: a(v))
+                group.addAction(action)
+                menu.addAction(action)
+            self.appearanceGroups[key] = group
+
     def createMenus(self):
         '''Create menu objects'''
 
@@ -4289,6 +4636,18 @@ class CustomMainWidget(QWidget):
         self.menuSelect_Theme = QMenu(self.menuSettings)
         self.menuSelect_Theme.setObjectName("menuSelect_Theme")
         self.menuSelect_Theme.setTitle(translate("MainWindow", "Select Theme"))
+
+        self.menuAccent = QMenu(self.menuSettings)
+        self.menuAccent.setObjectName("menuAccent")
+        self.menuAccent.setTitle(translate("MainWindow", "Accent Colour"))
+
+        self.menuTicks = QMenu(self.menuSettings)
+        self.menuTicks.setObjectName("menuTicks")
+        self.menuTicks.setTitle(translate("MainWindow", "Tick Style"))
+
+        self.menuRowSize = QMenu(self.menuSettings)
+        self.menuRowSize.setObjectName("menuRowSize")
+        self.menuRowSize.setTitle(translate("MainWindow", "Mod List Rows"))
 
         self.menuSelect_Language = QMenu(self.menuSettings)
         self.menuSelect_Language.setObjectName("menuSelect_Language")
@@ -4395,6 +4754,9 @@ class CustomMainWidget(QWidget):
         self.menuSettings.addAction(self.actionSetup)
         self.menuSettings.addSeparator()
         self.menuSettings.addAction(self.menuSelect_Theme.menuAction())
+        self.menuSettings.addAction(self.menuAccent.menuAction())
+        self.menuSettings.addAction(self.menuTicks.menuAction())
+        self.menuSettings.addAction(self.menuRowSize.menuAction())
         self.menuSettings.addAction(self.menuSelect_Language.menuAction())
         self.menuSettings.addAction(self.menuConfigure_Settings.menuAction())
 

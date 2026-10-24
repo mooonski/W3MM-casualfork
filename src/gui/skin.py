@@ -1,7 +1,7 @@
 '''Parts of the window's skin that a style sheet can't draw: the Play button and the mod list's rows'''
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPalette, QPen
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import QApplication, QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QWidget
 
 from src.gui.themes import STEEL, accentColor, isDark, statusColor
@@ -12,6 +12,13 @@ ROW_HEIGHT = 28
 UPDATE_KIND_ROLE = Qt.ItemDataRole.UserRole + 10
 # the number of mods under a separator
 GROUP_COUNT_ROLE = Qt.ItemDataRole.UserRole + 11
+# on the name: the mod's downloaded Nexus picture, and the line under the name in comfortable rows
+PICTURE_ROLE = Qt.ItemDataRole.UserRole + 12
+SUBTITLE_ROLE = Qt.ItemDataRole.UserRole + 13
+COMFORTABLE_HEIGHT = 50
+PICTURE_SIZE = QSize(64, 36)
+# picture tiles for mods without a picture, picked by their name
+TILES = ('#23405f', '#3d3460', '#1f4a3f', '#4f3f22', '#512a33', '#2f4426')
 
 
 class PlayButton(QPushButton):
@@ -101,22 +108,39 @@ class PlayButton(QPushButton):
 
 class ModListDelegate(QStyledItemDelegate):
     '''Draws the mod list's rows: separators as section headings, the Contents column as small tags, available
-    updates as a badge, and an accent edge on the selected rows'''
+    updates as a badge, and an accent edge on the selected rows. Comfortable rows are taller, with the mod's
+    picture (or a lettered tile) and a second line under its name.'''
 
-    def __init__(self, parent: QWidget, contentsColumn: int, updateColumn: int):
+    def __init__(self, parent: QWidget, contentsColumn: int, updateColumn: int, nameColumn: int = 1):
         super().__init__(parent)
         self.contentsColumn = contentsColumn
         self.updateColumn = updateColumn
+        self.nameColumn = nameColumn
+        self.comfortable = False
+        self.pictures: dict[str, QPixmap] = {}
+
+    def setComfortable(self, comfortable: bool) -> None:
+        self.comfortable = comfortable
 
     def sizeHint(self, option, index) -> QSize:
         hint = super().sizeHint(option, index)
-        return QSize(hint.width(), max(hint.height(), ROW_HEIGHT))
+        height = ROW_HEIGHT
+        if self.comfortable and index.data(GROUP_ROLE) is None and not self.isSeparatorRow(index):
+            height = COMFORTABLE_HEIGHT
+        return QSize(hint.width(), max(hint.height(), height))
+
+    @staticmethod
+    def isSeparatorRow(index) -> bool:
+        return index.siblingAtColumn(0).data(GROUP_ROLE) is not None
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
         if index.column() == 0 and index.data(GROUP_ROLE) is not None:
             self.paintSeparator(painter, option, index)
             return
-        if index.column() == self.contentsColumn:
+        if self.comfortable and index.column() == self.nameColumn and not self.isSeparatorRow(index):
+            self.paintBackground(painter, option, index)
+            self.paintNameWithPicture(painter, option, index)
+        elif index.column() == self.contentsColumn:
             self.paintBackground(painter, option, index)
             self.paintTags(painter, option, str(index.data() or '').split())
         elif index.column() == self.updateColumn and index.data(UPDATE_KIND_ROLE) == 'update':
@@ -167,6 +191,94 @@ class ModListDelegate(QStyledItemDelegate):
         font.setPointSizeF(font.pointSizeF() * scale)
         font.setWeight(QFont.Weight.DemiBold)
         return font
+
+    def picture(self, path: str) -> QPixmap | None:
+        """A mod's picture cropped to the tile's shape, loaded once"""
+        if not path:
+            return None
+        if path not in self.pictures:
+            app = QApplication.instance()
+            ratio = app.devicePixelRatio() if isinstance(app, QApplication) else 1.0
+            source = QPixmap(path)
+            if source.isNull():
+                self.pictures[path] = QPixmap()
+            else:
+                size = PICTURE_SIZE * ratio
+                scaled = source.scaled(
+                    size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation
+                )
+                left = (scaled.width() - size.width()) // 2
+                top = (scaled.height() - size.height()) // 2
+                cropped = scaled.copy(left, top, size.width(), size.height())
+                cropped.setDevicePixelRatio(ratio)
+                self.pictures[path] = cropped
+        picture = self.pictures[path]
+        return None if picture.isNull() else picture
+
+    @staticmethod
+    def initials(name: str) -> str:
+        words = [word for word in name.replace('[', ' ').replace(']', ' ').split() if word[:1].isalnum()]
+        if words and words[0].casefold() == 'mod.io':
+            words = words[1:]
+        return ''.join(word[0] for word in words[:2]).upper()
+
+    def paintNameWithPicture(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
+        cell = QStyleOptionViewItem(option)
+        self.initStyleOption(cell, index)
+        rect = QRectF(option.rect).adjusted(4, 0, -4, 0)
+        tile = QRectF(0, 0, PICTURE_SIZE.width(), PICTURE_SIZE.height())
+        tile.moveTopLeft(QPointF(rect.left(), rect.center().y() - PICTURE_SIZE.height() / 2))
+        name = str(index.data() or '')
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        outline = QPainterPath()
+        outline.addRoundedRect(tile, 5, 5)
+        picture = self.picture(str(index.data(PICTURE_ROLE) or ''))
+        if picture is not None:
+            painter.setClipPath(outline)
+            painter.drawPixmap(tile.toRect(), picture)
+            painter.setClipping(False)
+        else:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(TILES[sum(map(ord, name)) % len(TILES)]))
+            painter.drawPath(outline)
+            font = self.smallFont(option, 0.95)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.setPen(QColor('#d7e2ee'))
+            painter.drawText(tile, Qt.AlignmentFlag.AlignCenter, self.initials(name))
+        left = tile.right() + 10
+        width = max(0.0, rect.right() - left)
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        foreground = cell.palette.color(QPalette.ColorRole.HighlightedText if selected else QPalette.ColorRole.Text)
+        brush = index.data(Qt.ItemDataRole.ForegroundRole)
+        if brush is not None and not selected:
+            foreground = brush.color()
+        font = QFont(cell.font)
+        metrics = QFontMetrics(font)
+        subtitle = str(index.data(SUBTITLE_ROLE) or '')
+        small = self.smallFont(option, 0.88)
+        small.setWeight(QFont.Weight.Normal)
+        smallMetrics = QFontMetrics(small)
+        total = metrics.height() + (smallMetrics.height() + 1 if subtitle else 0)
+        top = rect.top() + (rect.height() - total) / 2
+        painter.setFont(font)
+        painter.setPen(foreground)
+        painter.drawText(
+            QRectF(left, top, width, metrics.height()),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            metrics.elidedText(name, Qt.TextElideMode.ElideRight, int(width)),
+        )
+        if subtitle:
+            painter.setFont(small)
+            painter.setPen(statusColor('muted', option.palette))
+            painter.drawText(
+                QRectF(left, top + metrics.height() + 1, width, smallMetrics.height()),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                smallMetrics.elidedText(subtitle, Qt.TextElideMode.ElideRight, int(width)),
+            )
+        painter.restore()
 
     def paintTags(self, painter: QPainter, option: QStyleOptionViewItem, tags: list[str]) -> None:
         if not tags:

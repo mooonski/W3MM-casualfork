@@ -87,7 +87,15 @@ if __name__ == "__main__":
         from src.gui.alerts import *
         from src.gui.main_widget import CustomMainWidget
         from src.gui.main_window import CustomMainWindow
-        from src.gui.themes import ManagerStyle, get_dark_palette, get_light_palette, get_system_palette, styleSheet
+        from src.gui.themes import (
+            ManagerStyle,
+            get_dark_palette,
+            get_light_palette,
+            get_system_palette,
+            setAccent,
+            setTickStyle,
+            styleSheet,
+        )
         from src.util.util import *
 
         # correct screen scaling
@@ -172,6 +180,8 @@ if __name__ == "__main__":
             if sendToRunningInstance(instanceName(data.config.configuration), nxmLink):
                 sys.exit(0)
 
+        setAccent(data.config.get("SETTINGS", "accent", "red"))
+        setTickStyle(data.config.get("SETTINGS", "ticks", "box"))
         data.app.setStyle(ManagerStyle())
 
         data.dark_palette = get_dark_palette()
