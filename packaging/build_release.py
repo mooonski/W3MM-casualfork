@@ -2,15 +2,20 @@
 
 cx_Freeze copies the whole PySide6 package, about 340 MB, most of it Qt modules the manager never loads
 (WebEngine, QML, Designer, PDF). The copy in dist/ leaves those out, and the installer is made from that copy.
+Compiled modules record where their source was on the build machine (a path with the Windows account name,
+shown in tracebacks), so the copy's .pyc files are rewritten with generic paths and the build fails if any remain.
 
 Run with the project's Python from the repository root: python packaging/build_release.py
 Needs Inno Setup 6 for the installer (ISCC.exe); without it, only the trimmed folder is made.'''
 
+import marshal
 import os
 import re
 import shutil
 import subprocess
 import sys
+import types
+import zipfile
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 DIST = os.path.join(ROOT, 'dist')
@@ -88,6 +93,82 @@ def trimmedCopy(build: str, target: str) -> tuple[int, int]:
     return copied, skipped
 
 
+def genericFilename(filename: str) -> str:
+    '''The recorded source path of a compiled module without the build machine's folders:
+    <python>/Lib/..., <site-packages>/..., <project>/... or ~/...'''
+    normalized = filename.replace('/', '\\')
+    for marker, placeholder in (('\\Lib\\', '<python>\\Lib\\'), ('\\site-packages\\', '<site-packages>\\')):
+        index = normalized.rfind(marker)
+        if index >= 0:
+            return placeholder + normalized[index + len(marker) :]
+    root = ROOT.replace('/', '\\')
+    if normalized.lower().startswith(root.lower() + '\\'):
+        return '<project>\\' + normalized[len(root) + 1 :]
+    home = os.path.expanduser('~').replace('/', '\\')
+    if normalized.lower().startswith(home.lower() + '\\'):
+        return '~\\' + normalized[len(home) + 1 :]
+    return normalized
+
+
+def scrubbedCode(code: types.CodeType) -> types.CodeType:
+    consts = tuple(scrubbedCode(const) if isinstance(const, types.CodeType) else const for const in code.co_consts)
+    return code.replace(co_filename=genericFilename(code.co_filename), co_consts=consts)
+
+
+def scrubbedPyc(data: bytes) -> bytes:
+    '''A .pyc with the build machine's paths taken out of its code objects (they would show in tracebacks).
+    The 16-byte header (magic, flags, source mtime and size) is kept as it is.'''
+    header, code = data[:16], marshal.loads(data[16:])
+    return header + marshal.dumps(scrubbedCode(code))
+
+
+def scrubPaths(folder: str) -> int:
+    '''Rewrites every .pyc in the folder and in lib/library.zip. Returns the number of files rewritten.'''
+    count = 0
+    for inner, _, files in os.walk(folder):
+        for name in files:
+            if name.endswith('.pyc'):
+                path = os.path.join(inner, name)
+                with open(path, 'rb') as file:
+                    data = file.read()
+                with open(path, 'wb') as file:
+                    file.write(scrubbedPyc(data))
+                count += 1
+    library = os.path.join(folder, 'lib', 'library.zip')
+    if os.path.isfile(library):
+        rewritten = library + '.new'
+        with zipfile.ZipFile(library) as source, zipfile.ZipFile(rewritten, 'w', zipfile.ZIP_DEFLATED) as target:
+            for info in source.infolist():
+                data = source.read(info)
+                if info.filename.endswith('.pyc'):
+                    data = scrubbedPyc(data)
+                    count += 1
+                target.writestr(info, data)
+        os.replace(rewritten, library)
+    return count
+
+
+def remainingPaths(folder: str, needle: str) -> list[str]:
+    '''Files in the folder, including inside lib/library.zip, still containing the needle'''
+    found = []
+    needleBytes = needle.lower().encode()
+    for inner, _, files in os.walk(folder):
+        for name in files:
+            path = os.path.join(inner, name)
+            with open(path, 'rb') as file:
+                data = file.read()
+            if name == 'library.zip':
+                with zipfile.ZipFile(path) as library:
+                    found += [
+                        f'{path}:{member}'
+                        for member in library.namelist()
+                        if needleBytes in library.read(member).lower()
+                    ]
+            elif needleBytes in data.lower():
+                found.append(path)
+    return found
+
+
 def main() -> None:
     version = forkVersion()
     build = os.path.join(ROOT, 'build', f'W3MM-casualfork-{version}')
@@ -100,6 +181,11 @@ def main() -> None:
     subprocess.run([sys.executable, 'setup.py', 'build_exe', f'--build-exe={build}'], cwd=ROOT, check=True)
     copied, skipped = trimmedCopy(build, folder)
     print(f'copied {copied / 2**20:.0f} MB to {folder}, left out {skipped / 2**20:.0f} MB')
+    print(f'scrubbed build paths from {scrubPaths(folder)} compiled modules')
+    # the user profile folder names the Windows account; it mustn't be anywhere in the release
+    leaked = remainingPaths(folder, os.path.expanduser('~'))
+    if leaked:
+        raise SystemExit('the build machine\'s profile path is still in: ' + ', '.join(leaked))
 
     iscc = next((path for path in ISCC_PATHS if os.path.isfile(path)), None)
     if not iscc:
