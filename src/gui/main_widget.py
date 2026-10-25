@@ -2636,6 +2636,18 @@ class CustomMainWidget(QWidget):
             return None
         first = matches[0]
         version = versionNote(mod, first.mod)
+        updater = ModUpdater(self.model, output=self.output)
+        newName = updater.newNameFor(first.mod, mod.name)
+        keeping = (
+            translate("MainWindow", "with this version, renaming it to")
+            + f" '{newName}' "
+            + translate("MainWindow", "and keeping its priority, enabled state and settings, after backing it up.")
+            if newName
+            else translate(
+                "MainWindow",
+                "with this version, keeping its name, priority, enabled state and settings, after backing it up.",
+            )
+        )
         text = (
             f"'{mod.name}' "
             + translate("MainWindow", "looks like a mod that's already installed:")
@@ -2645,10 +2657,7 @@ class CustomMainWidget(QWidget):
             + (version + "\n\n" if version else "")
             + translate("MainWindow", "Update replaces")
             + f" '{first.mod.name}' "
-            + translate(
-                "MainWindow",
-                "with this version, keeping its name, priority, enabled state and settings, after backing it up.",
-            )
+            + keeping
         )
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Question)
@@ -2681,8 +2690,11 @@ class CustomMainWidget(QWidget):
         if nexus is None and existing.nexus:
             # a new version from an archive that doesn't say which Nexus file it is
             nexus = NexusInfo(existing.nexus.modId, game=existing.nexus.game)
-        result = ModUpdater(self.model, output=self.output).update(existing, source, nexus, "install")
-        self.updateChecks.pop(existing.name, None)
+        oldName = existing.name
+        result = updater.update(existing, source, nexus, "install", newName)
+        self.updateChecks.pop(oldName, None)
+        if newName:
+            self.updateChecks.pop(newName, None)
         return result.success, int(result.success), int(result.incomplete)
 
     def uniqueName(self, name: str) -> str:

@@ -162,7 +162,7 @@ class HandlerTests(unittest.TestCase):
     def outputs(self):
         return "\n".join(str(call.args[0]) for call in self.widget.output.call_args_list)
 
-    def choose(self, button: int, incoming: Mod, result=UpdateResult(True, False, "backup")):
+    def choose(self, button: int, incoming: Mod, result=UpdateResult(True, False, "backup"), newName=None):
         buttons = [object(), object(), object()]  # update, install separately, skip
         with (
             patch("src.gui.main_widget.QMessageBox") as box,
@@ -171,6 +171,7 @@ class HandlerTests(unittest.TestCase):
             box.return_value.addButton.side_effect = buttons
             box.return_value.clickedButton.return_value = buttons[button]
             updater.return_value.update.return_value = result
+            updater.return_value.newNameFor.return_value = newName
             outcome = CustomMainWidget.handleDuplicate(self.widget, incoming, "C:/extracted")
         return outcome, box.return_value, updater.return_value
 
@@ -183,11 +184,19 @@ class HandlerTests(unittest.TestCase):
         incoming = mod("Example", ["modExample"], nexus=NexusInfo(5, version="2.0", archive=NEW))
         outcome, box, updater = self.choose(0, incoming)
         self.assertEqual(outcome, (True, 1, 0))
-        updater.update.assert_called_once_with(self.existing, "C:/extracted", incoming.nexus, "install")
+        updater.update.assert_called_once_with(self.existing, "C:/extracted", incoming.nexus, "install", None)
         text = box.setText.call_args.args[0]
         self.assertIn("Example is already installed", text)
         self.assertIn("Installed: 1.0, this archive: 2.0", text)
+        self.assertIn("keeping its name", text)
         self.assertEqual(self.widget.updateChecks, {})
+
+    def test_update_takes_the_new_version_name(self):
+        incoming = mod("Example 2.0", ["modExample"])
+        _, box, updater = self.choose(0, incoming, newName="Example 2.0")
+        updater.newNameFor.assert_called_once_with(self.existing, "Example 2.0")
+        self.assertEqual(updater.update.call_args.args[4], "Example 2.0")
+        self.assertIn("renaming it to 'Example 2.0'", box.setText.call_args.args[0])
 
     def test_update_from_unnamed_archive_keeps_nexus_mod(self):
         _, _, updater = self.choose(0, mod("Renamed Copy", ["modExample"]), UpdateResult(False, False, "b"))

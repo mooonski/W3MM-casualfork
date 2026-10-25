@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 from src.core.installer import Installer
 from src.core.model import Model
-from src.core.nexus import NexusInfo, safeFileName
+from src.core.nexus import NexusInfo, nameKey, safeFileName
 from src.domain.mod import Mod
 from src.globals import data
 from src.globals.constants import translate
@@ -54,6 +54,12 @@ class Backup:
         return text
 
 
+def versionedName(old: str, new: str) -> bool:
+    '''True when new is old with a different version in it, e.g. 'Gwent Vanilla Plus 0.3' and '... 0.4'.
+    An entry updated from such an archive takes the new name.'''
+    return old != new and any(c.isdigit() for c in new) and bool(nameKey(old)) and nameKey(old) == nameKey(new)
+
+
 class ModUpdater:
     '''Replaces an installed mod's files with a new version while keeping its entry, priority and state.
 
@@ -72,18 +78,33 @@ class ModUpdater:
 
     # ------------------------------------------------------------ public
 
-    def update(self, mod: Mod, source: str, nexus: NexusInfo | None = None, reason: str = "update") -> UpdateResult:
-        '''Installs source (an archive or folder) into mod's entry'''
-        return self._replace(mod, source, nexus, reason, None)
+    def update(
+        self,
+        mod: Mod,
+        source: str,
+        nexus: NexusInfo | None = None,
+        reason: str = "update",
+        newName: str | None = None,
+    ) -> UpdateResult:
+        '''Installs source (an archive or folder) into mod's entry, renaming the entry to newName if given'''
+        return self._replace(mod, source, nexus, reason, None, newName)
 
     def restore(self, backup: Backup) -> UpdateResult:
         '''Reinstalls a backed up version. The version being replaced is backed up first.'''
         entry = self.readEntry(backup.directory)
         source = path.join(backup.directory, "data")
-        current = self.model.modList.get(entry.name)
+        # the entry may have been renamed to a newer version since; its backups moved along with it
+        current = self.model.modList.get(backup.name) or self.model.modList.get(entry.name)
         if current is None:
             return self._installRestored(entry, source)
-        return self._replace(current, source, entry.nexus, "restore", entry)
+        newName = entry.name if versionedName(current.name, entry.name) else None
+        return self._replace(current, source, entry.nexus, "restore", entry, newName)
+
+    def newNameFor(self, mod: Mod, incoming: str) -> str | None:
+        '''The name mod's entry takes when updated from a mod named incoming, if it changes'''
+        if versionedName(mod.name, incoming) and incoming not in self.model.modList:
+            return incoming
+        return None
 
     def listBackups(self, name: str | None = None) -> list[Backup]:
         '''Backups of the named mod (or all mods), newest first'''
@@ -127,8 +148,19 @@ class ModUpdater:
 
     # ------------------------------------------------------------ the update
 
-    def _replace(self, mod: Mod, source: str, nexus: NexusInfo | None, reason: str, entry: Mod | None) -> UpdateResult:
+    def _replace(
+        self,
+        mod: Mod,
+        source: str,
+        nexus: NexusInfo | None,
+        reason: str,
+        entry: Mod | None,
+        newName: str | None = None,
+    ) -> UpdateResult:
         name = mod.name
+        if newName is not None and (newName == name or newName in self.model.modList):
+            newName = None
+        target = newName or name
         wasEnabled = mod.enabled
         priority = mod._priority
         backup = self.createBackup(mod, reason)
@@ -148,10 +180,10 @@ class ModUpdater:
 
             installer = Installer(self.model, keepUserSettings=True, output=self.output)
             installer.progress = lambda p: self.progress(0.3 + 0.6 * p)
-            success, _, incomplete = installer.installMod(source, name=name)
-            if not success or name not in self.model.modList:
+            success, _, incomplete = installer.installMod(source, name=target)
+            if not success or target not in self.model.modList:
                 raise UpdateFailed(translate("MainWindow", "The new version could not be installed"))
-            new = self.model.get(name)
+            new = self.model.get(target)
             if entry is not None:
                 incomplete = self._applyEntry(new, entry) or incomplete
             new.nexus = nexus if nexus is not None else mod.nexus
@@ -163,11 +195,21 @@ class ModUpdater:
             if not wasEnabled:
                 new.disable()
             self.model.write()
+            if newName:
+                self.output(
+                    translate("MainWindow", "Renamed") + f" '{name}' " + translate("MainWindow", "to") + f" '{newName}'"
+                )
+                try:
+                    backup = self._moveBackups(name, newName, backup)
+                except OSError as error:
+                    self.output(formatUserError(error))
             self.progress(1.0)
             return UpdateResult(True, bool(incomplete), backup)
         except Exception as error:
             self.output(formatUserError(error))
             self.output(translate("MainWindow", "Restoring the previous version of") + f" {name}")
+            if newName:
+                self.model.modList.pop(newName, None)
             try:
                 self._rollback(mod, wasEnabled, backup, before)
                 self.output(translate("MainWindow", "Restored") + f" {name}")
@@ -216,6 +258,38 @@ class ModUpdater:
     @staticmethod
     def _folderName(name: str) -> str:
         return safeFileName(name) or "mod"
+
+    def _moveBackups(self, old: str, new: str, current: str) -> str:
+        '''Moves old's backups to new's backup folder after a rename, so Restore still finds them.
+        Returns where the backup at current ended up. The emptied folder is left in place.'''
+        root = data.getConfig().backups
+        source = path.normpath(path.join(root, self._folderName(old)))
+        destination = path.normpath(path.join(root, self._folderName(new)))
+        if path.normcase(source) == path.normcase(destination) or not path.isdir(source):
+            return current
+        os.makedirs(destination, exist_ok=True)
+        for stamp in sorted(os.listdir(source)):
+            directory = path.join(source, stamp)
+            metaFile = path.join(directory, "backup.json")
+            try:
+                with open(metaFile, encoding="utf-8") as file:
+                    meta = json.load(file)
+            except (OSError, ValueError):
+                continue
+            if meta.get("name") != old:
+                continue
+            meta["name"] = new
+            with atomicWrite(metaFile, "w", encoding="utf-8") as file:
+                json.dump(meta, file, indent=2)
+            target = path.join(destination, stamp)
+            number = 2
+            while path.exists(target):
+                target = path.join(destination, f"{stamp}-{number}")
+                number += 1
+            os.rename(directory, target)
+            if path.normcase(path.normpath(directory)) == path.normcase(path.normpath(current)):
+                current = target
+        return current
 
     def createBackup(self, mod: Mod, reason: str) -> str:
         config = data.getConfig()

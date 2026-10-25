@@ -29,7 +29,7 @@ from src.core.nexus import (
     uniquePath,
     unprotectSecret,
 )
-from src.core.updater import ModUpdater
+from src.core.updater import ModUpdater, versionedName
 
 
 def apiFile(fileId, name, version, category, uploaded, fileName='', primary=False, changelog=''):
@@ -508,6 +508,49 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual([setting.option for setting in restored.usersettings], ["OptionA"])
         self.assertIn("OptionA=7", (self.settings / "user.settings").read_text())
         self.assertEqual(len(updater.listBackups("Example")), 2)
+
+    def test_versioned_name(self):
+        self.assertTrue(versionedName("Gwent Vanilla Plus 0.3", "Gwent Vanilla Plus 0.4"))
+        self.assertTrue(versionedName("Gwent Vanilla Plus", "Gwent Vanilla Plus 0.4"))
+        self.assertFalse(versionedName("Gwent Vanilla Plus 0.4", "Gwent Vanilla Plus 0.4"))
+        self.assertFalse(versionedName("Gwent Vanilla Plus 0.3", "Gwent Vanilla Plus"))
+        self.assertFalse(versionedName("Gwent Vanilla Plus 0.3", "Gwent Redux 0.4"))
+        self.assertFalse(versionedName("1.0", "2.0"))
+
+    def test_update_renames_to_the_new_version_and_restore_renames_back(self):
+        mod = self.installV1(priority=3)
+        self.model.rename("Example", "Example 1.0")
+        updater = ModUpdater(self.model)
+        self.assertIsNone(updater.newNameFor(mod, "Example 1.0"))
+        self.assertIsNone(updater.newNameFor(mod, "Other 2.0"))
+        newName = updater.newNameFor(mod, "Example 2.0")
+        self.assertEqual(newName, "Example 2.0")
+        result = updater.update(mod, self.package("v2", "v2"), None, "install", newName)
+        self.assertTrue(result.success)
+        self.assertEqual(list(self.model.list()), ["Example 2.0"])
+        updated = Model(ignorelock=True).get("Example 2.0")
+        self.assertEqual(updated.priority, "3")
+        self.assertEqual(self.asset(), "v2")
+        # the backup moved along with the entry
+        self.assertEqual(updater.listBackups("Example 1.0"), [])
+        backups = updater.listBackups("Example 2.0")
+        self.assertEqual([backup.directory for backup in backups], [result.backup])
+        self.assertTrue(Path(result.backup, "data/mods/modExample").is_dir())
+        restored = updater.restore(backups[0])
+        self.assertTrue(restored.success)
+        self.assertEqual(list(self.model.list()), ["Example 1.0"])
+        self.assertEqual(self.asset(), "v1")
+        self.assertEqual(len(updater.listBackups("Example 1.0")), 2)
+
+    def test_failed_renaming_update_keeps_the_old_name(self):
+        mod = self.installV1()
+        broken = self.root / "packages" / "broken"
+        broken.mkdir(parents=True)
+        with patch("src.core.model.MessageAlertWritingFailed"):
+            result = ModUpdater(self.model).update(mod, str(broken), None, "install", "Example 2.0")
+        self.assertFalse(result.success)
+        self.assertEqual(list(self.model.list()), ["Example"])
+        self.assertEqual(self.asset(), "v1")
 
     def test_nexus_details_round_trip_through_inventory(self):
         mod = self.installV1()
