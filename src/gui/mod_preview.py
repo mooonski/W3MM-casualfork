@@ -9,7 +9,6 @@ from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
-    QHBoxLayout,
     QLabel,
     QMenu,
     QPushButton,
@@ -105,9 +104,8 @@ class ModPreview(QWidget):
         self.chips = QWidget(content)
         self.chipsLayout = FlowLayout(self.chips)
         self.actions = QWidget(content)
-        actions = QHBoxLayout(self.actions)
-        actions.setContentsMargins(0, 2, 0, 2)
-        actions.setSpacing(6)
+        # the buttons wrap onto another line when the panel is narrow
+        actions = FlowLayout(self.actions)
         self.updateButton = QPushButton(translate("Preview", "Update"), self.actions)
         self.updateButton.setObjectName("previewUpdate")
         self.updateButton.clicked.connect(lambda: self.updateRequested.emit())
@@ -123,7 +121,6 @@ class ModPreview(QWidget):
         self.moreButton.setVisible(False)
         for button in (self.updateButton, self.nexusButton, self.endorseButton, self.moreButton):
             actions.addWidget(button)
-        actions.addStretch(1)
         for widget in (self.image, self.title, self.meta, self.chips, self.warning, self.actions):
             layout.addWidget(widget)
 
@@ -174,7 +171,7 @@ class ModPreview(QWidget):
         changelogLayout.addStretch(1)
         self.pages.addWidget(changelog)
         self.requirements = self.page(self.richLabel(None))
-        # the pages are as tall as the shown one, not the tallest
+        # the pages are as tall and as wide as the shown one, not the largest
         self.pages.currentChanged.connect(self.fitPage)
 
         layout.addStretch(1)
@@ -204,7 +201,7 @@ class ModPreview(QWidget):
     def fitPage(self, index: int) -> None:
         for page in range(self.pages.count()):
             policy = QSizePolicy.Policy.Preferred if page == index else QSizePolicy.Policy.Ignored
-            self.pages.widget(page).setSizePolicy(QSizePolicy.Policy.Preferred, policy)
+            self.pages.widget(page).setSizePolicy(policy, policy)
         self.pages.adjustSize()
 
     def showMod(

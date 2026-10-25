@@ -14,7 +14,15 @@ from PySide6.QtWidgets import QApplication, QWidget
 from src.core.nexusdetails import DetailsCache, ModDetails
 from src.gui.browse_widget import BrowseWidget
 from src.gui.downloads_widget import DownloadsWidget
-from src.gui.mod_preview import IMAGE_HEIGHT, ModPreview
+from src.gui.mod_preview import (
+    CHANGELOG_TAB,
+    DETAILS_TAB,
+    FILES_TAB,
+    IMAGE_HEIGHT,
+    REQUIREMENTS_TAB,
+    ModPreview,
+    PreviewSections,
+)
 
 SHORT = ModDetails(1, "Short", summary="One line.", category="Armour", version="1")
 LONG = ModDetails(
@@ -108,6 +116,35 @@ class PreviewLayoutTests(LayoutTestCase):
         self.preview.resize(700, 900)
         self.check("wide and tall")
         self.assertFalse(self.preview.scroll.verticalScrollBar().isVisible())
+
+    def test_installed_mod_fits_a_narrow_panel_on_every_tab(self):
+        sections = PreviewSections(
+            chips=[("Enabled", "ok"), ("Priority 10", ""), ("Update", "update")],
+            linked=True,
+            updateAvailable=True,
+            facts=[("Installed", "2026-10-24")],
+            files="mods/modLong",
+            changelog="",
+            changelogLoadable=True,
+            requirements="None",
+        )
+        self.preview.resize(120, 400)
+        self.preview.showDetails(LONG, self.picture, True, sections)
+        self.preview.showSections(sections)
+        for tab in (DETAILS_TAB, FILES_TAB, CHANGELOG_TAB, REQUIREMENTS_TAB):
+            self.preview.tabs.setCurrentIndex(tab)
+            settle(self.app)
+            viewport = self.preview.scroll.viewport()
+            parts = [self.preview.chips, self.preview.actions, self.preview.tabs, self.preview.pages]
+            parts += [self.preview.updateButton, self.preview.nexusButton, self.preview.endorseButton]
+            parts += [self.preview.loadChangelog] if tab == CHANGELOG_TAB else []
+            with self.subTest(tab=tab):
+                self.assertLessEqual(self.preview.scroll.widget().width(), viewport.width())
+                for part in parts:
+                    self.assertTrue(part.isVisible(), part)
+                    self.assertLessEqual(rectIn(part, viewport).right(), viewport.width() - 1, f"{part} is cut off")
+                self.assertNoOverlap([self.preview.updateButton, self.preview.nexusButton], viewport)
+                self.assertNoOverlap([self.preview.nexusButton, self.preview.endorseButton], viewport)
 
     def test_picture_keeps_its_shape(self):
         self.preview.resize(400, 600)
