@@ -8,7 +8,7 @@ Works with Original, Next-Gen, and Remastered installations.
 
 ## About This Fork
 
-This is "casual fork", an unofficial fork of [Systemcluster's The Witcher 3 Mod Manager](https://github.com/Systemcluster/The-Witcher-3-Mod-manager), built on version 0.10.5 and developed on the `nexus-updates` branch. It adds Nexus Mods updates and downloads, plus tools that were previously spread over several other programs. The rest of this readme describes the upstream manager, which all of this builds on.
+This is "FMTweak Form" (called "casual fork" before 1.0), an unofficial fork of [Systemcluster's The Witcher 3 Mod Manager](https://github.com/Systemcluster/The-Witcher-3-Mod-manager), built on version 0.10.5 and developed on the `nexus-updates` branch. It adds Nexus Mods updates and downloads, plus tools that were previously spread over several other programs. The rest of this readme describes the upstream manager, which all of this builds on.
 
 It isn't made or supported by the upstream authors. Please report problems with the fork in this repository's issues, not upstream. It is developed and tested on Windows with Witcher 3 Remastered; the new features haven't been tried on Linux or macOS, and some of them (API key storage, Recycle Bin, the `nxm://` handler) are Windows-only.
 

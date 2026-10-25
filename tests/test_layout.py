@@ -195,7 +195,7 @@ class MainWindowLayoutTests(LayoutTestCase):
         self.assertEqual(lefts, sorted(lefts))
         self.assertFalse(widget.updateButton.isVisible(), "Update shows only when updates are waiting")
         self.assertLess(rectIn(widget.pageTitle, window).right(), rectIn(widget.checkButton, window).left())
-        self.assertIn("(casual fork 0.2, source)", window.windowTitle())
+        self.assertIn("(FMTweak Form 1.0, source)", window.windowTitle())
         # the menus open from the logo at the top of the rail; the version sits at its bottom
         self.assertFalse(widget.menubar.isVisible())
         self.assertEqual(rectIn(widget.topBar, window).top(), 0, "the top bar is the window's first row")
@@ -221,7 +221,7 @@ class MainWindowLayoutTests(LayoutTestCase):
             [action.text() for action in widget.mainMenu.actions()], ["Mods", "Edit", "Nexus", "Settings", "Help"]
         )
         self.assertIs(widget.forkLabel.parent(), widget.rail)
-        self.assertEqual(widget.forkLabel.text(), "casual fork 0.2\nsource")
+        self.assertEqual(widget.forkLabel.text(), "FMTweak Form 1.0\nsource")
         self.assertTrue(widget.forkLabel.isVisible())
         self.assertInside(widget.forkLabel, window)
         self.assertGreater(

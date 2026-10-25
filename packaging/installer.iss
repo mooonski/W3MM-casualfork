@@ -6,7 +6,9 @@
   #error Run packaging/build_release.py instead of compiling this script directly
 #endif
 
-#define AppName "W3MM casual fork"
+#define AppName "FMTweak Form"
+; the name before 1.0; its shortcuts are removed when installing over it
+#define OldAppName "W3MM casual fork"
 #define AppExe "W3MM-casualfork.exe"
 ; the same as APP_ID in src/globals/constants.py, so the Start menu shortcut and the window share a taskbar button
 #define AppUserModelId "W3MM.casualfork"
@@ -43,6 +45,10 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[InstallDelete]
+Type: files; Name: "{autoprograms}\{#OldAppName}.lnk"
+Type: files; Name: "{autodesktop}\{#OldAppName}.lnk"
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; AppUserModelID: "{#AppUserModelId}"

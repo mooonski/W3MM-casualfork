@@ -41,7 +41,7 @@ LEFT_OUT = {
 
 def forkVersion() -> str:
     with open(os.path.join(ROOT, 'src', 'globals', 'constants.py'), encoding='utf-8') as file:
-        match = re.search(r'^FORK_VERSION = "casual fork ([0-9.]+)"', file.read(), re.MULTILINE)
+        match = re.search(r'^FORK_VERSION = "[^"0-9]*([0-9.]+)"', file.read(), re.MULTILINE)
     if not match:
         raise SystemExit('FORK_VERSION not found in src/globals/constants.py')
     return match.group(1)

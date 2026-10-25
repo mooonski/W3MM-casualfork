@@ -2907,7 +2907,7 @@ class CustomMainWidget(QWidget):
             self.installManagerUpdate(release)
         else:
             self.output(
-                translate("MainWindow", "casual fork") + f" {release.version} "
+                translate("MainWindow", "FMTweak Form") + f" {release.version} "
                 + translate("MainWindow", "is available (Help > Update Manager...).")
             )  # fmt: skip
 

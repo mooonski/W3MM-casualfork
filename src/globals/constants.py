@@ -8,7 +8,7 @@ translate = QCoreApplication.translate
 
 VERSION = "0.10.5"
 # this fork of W3MM (Nexus updates, RMMR import, Script Merger checks); shown next to the upstream version
-FORK_VERSION = "casual fork 0.2"
+FORK_VERSION = "FMTweak Form 1.0"
 
 
 def forkLabel() -> str:

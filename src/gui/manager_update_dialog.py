@@ -33,7 +33,7 @@ class ManagerUpdateDialog(QDialog):
         layout = QVBoxLayout(self)
 
         heading = QLabel(
-            translate("ManagerUpdate", "casual fork") + f" {release.version} "
+            translate("ManagerUpdate", "FMTweak Form") + f" {release.version} "
             + translate("ManagerUpdate", "is available. You have") + f" {current}.",
             self,
         )  # fmt: skip

@@ -59,7 +59,7 @@ class UpdateCheckResult:
 
 
 def currentVersion() -> str:
-    '''The number in FORK_VERSION ("casual fork 0.2" -> "0.2")'''
+    '''The number in FORK_VERSION ("FMTweak Form 1.0" -> "1.0")'''
     match = re.search(r"([0-9]+(?:\.[0-9]+)*)", FORK_VERSION)
     return match.group(1) if match else "0"
 
