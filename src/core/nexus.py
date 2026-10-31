@@ -15,13 +15,15 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.globals.constants import VERSION
+from src.globals.constants import FORK_VERSION
 
 API_URL = "https://api.nexusmods.com/v1/"
 GAME_DOMAIN = "witcher3"
 APP_NAME = "TW3MM"
 # Sent to Nexus Mods so requests from this fork aren't counted as upstream's
 CLIENT_NAME = "W3MM-casualfork"
+# the fork's own release number ("FMTweak Form 1.0.1" -> "1.0.1"), which Nexus asks for as Application-Version
+CLIENT_VERSION = re.search(r"[0-9]+(?:\.[0-9]+)*", FORK_VERSION).group(0)  # type: ignore[union-attr]
 
 # Nexus file categories that are offered as the current version of a mod
 # (UPDATE files are usually patches applied on top of a main file, so they're not offered as replacements)
@@ -445,8 +447,8 @@ class NexusClient:
         return {
             'apikey': self.apikey,
             'Application-Name': CLIENT_NAME,
-            'Application-Version': VERSION,
-            'User-Agent': f"{CLIENT_NAME}/{VERSION}",
+            'Application-Version': CLIENT_VERSION,
+            'User-Agent': f"{CLIENT_NAME}/{CLIENT_VERSION}",
             'Accept': 'application/json',
         }
 
@@ -550,7 +552,7 @@ class NexusClient:
         if expectedSize and os.path.isfile(existing) and os.path.getsize(existing) == expectedSize:
             return existing
         partial = uniquePath(directory, filename + '.part')
-        request = urllib.request.Request(encodeUrl(url), headers={'User-Agent': f"{CLIENT_NAME}/{VERSION}"})
+        request = urllib.request.Request(encodeUrl(url), headers={'User-Agent': f"{CLIENT_NAME}/{CLIENT_VERSION}"})
         done = 0
         try:
             with self.opener(request, timeout=self.timeout) as response, open(partial, 'wb') as output:

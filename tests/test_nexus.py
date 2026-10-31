@@ -30,6 +30,7 @@ from src.core.nexus import (
     unprotectSecret,
 )
 from src.core.updater import ModUpdater, versionedName
+from src.globals.constants import FORK_VERSION
 
 
 def apiFile(fileId, name, version, category, uploaded, fileName='', primary=False, changelog=''):
@@ -233,6 +234,11 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(list(files.files), [4])
         self.assertTrue(requests[0].full_url.endswith("/v1/games/witcher3/mods/820/files.json"))
         self.assertEqual(requests[0].get_header("Apikey"), "secret")
+        # Nexus asks for the app's own release number, not the upstream manager's
+        version = FORK_VERSION.rsplit(" ", 1)[-1]
+        self.assertEqual(requests[0].get_header("Application-name"), "W3MM-casualfork")
+        self.assertEqual(requests[0].get_header("Application-version"), version)
+        self.assertEqual(requests[0].get_header("User-agent"), f"W3MM-casualfork/{version}")
 
     def test_errors_are_explained(self):
         def opener(request, timeout):

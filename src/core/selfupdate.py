@@ -16,8 +16,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from src.core.nexus import CLIENT_NAME, NexusError, uniquePath
-from src.globals.constants import FORK_VERSION, VERSION
+from src.core.nexus import CLIENT_NAME, CLIENT_VERSION, NexusError, uniquePath
+from src.globals.constants import FORK_VERSION
 
 REPOSITORY = "mooonski/W3MM-casualfork"
 RELEASES_URL = f"https://github.com/{REPOSITORY}/releases"
@@ -106,7 +106,7 @@ def parseRelease(payload: Any) -> ManagerRelease:
 
 
 def headers() -> dict[str, str]:
-    return {"User-Agent": f"{CLIENT_NAME}/{VERSION}", "Accept": "application/vnd.github+json"}
+    return {"User-Agent": f"{CLIENT_NAME}/{CLIENT_VERSION}", "Accept": "application/vnd.github+json"}
 
 
 def fetchLatest(opener: Callable[..., Any] = urllib.request.urlopen) -> ManagerRelease:
