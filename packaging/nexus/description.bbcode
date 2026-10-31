@@ -1,0 +1,74 @@
+[center][size=6][b]FMTweak Form[/b][/size]
+[size=3]A mod manager for The Witcher 3 with Nexus updates, Script Merger and health checks built in[/size][/center]
+
+[size=4][b]What it is[/b][/size]
+FMTweak Form is an unofficial fork of [url=https://www.nexusmods.com/witcher3/mods/2678]The Witcher 3 Mod Manager[/url] by stefan3372 and Systemcluster. It keeps everything the original does and adds Nexus Mods updates and downloads, plus tools that used to need several separate programs.
+
+It is made for and tested on [b]Witcher 3 Remastered[/b] (Steam and GOG, Windows 10/11). Original and Next-Gen installs are supported by the manager it builds on, but the new features have only been tested on Remastered.
+
+[size=4][b]Features[/b][/size]
+[b]Nexus Mods[/b]
+[list]
+[*][b]Check for Updates[/b] marks every mod with a newer file on Nexus. [b]Update[/b] installs it in place of the old version and keeps its priority, enabled state and separator. The old version is backed up first and can be restored.
+[*]Changelogs in the updates window, following each mod's file update chain
+[*]Browse and search Witcher 3 mods on Nexus, pick a file and install it
+[*]Thumbnails, categories and summaries for linked mods
+[*]Requirements check: mods, expansions and tools your mods' pages say they need
+[*]Finds mods not updated since Remastered, and newer versions that were
+[*]Endorse from the mod list, download history, optional nxm:// link handler (links for other games are passed on to your previous manager)
+[/list]
+
+[b]Script Merger[/b]
+[list]
+[*]Launch Script Merger from the manager; remaining conflicts are reported when it closes
+[*]Conflict warnings and a prompt to merge after installing or updating
+[*]Updates Script Merger from Nexus, keeping your merges and settings
+[/list]
+
+[b]Mod list and load order[/b]
+[list]
+[*]Separators to group mods, drag-and-drop load order, tick several mods and toggle them at once
+[*]Priorities always follow mods.settings, including edits made outside the manager
+[*]Mods the game installed from mod.io are shown (display only)
+[*]Import installed mods and their Nexus IDs from Relapse's Mod Manager Redux
+[/list]
+
+[b]Health and safety[/b]
+[list]
+[*]Health check: missing files, mods installed twice, unmerged conflicts, Sharedutils load order on Remastered (one-click fix), ReShade problems
+[*]File conflicts: which mod wins when several pack the same file
+[*]Backs up your newest saves before updating mods
+[*]Installs and tracks files for the game's bin folder (such as ReShade add-ons) and never overwrites files it didn't install
+[*]ReShade: shows the version and build, turns it on or off, updates it
+[/list]
+
+[size=4][b]Installing[/b][/size]
+[list=1]
+[*]Download the main file and unzip it.
+[*]Run [b]W3MM-casualfork-<version>-setup.exe[/b]. It installs for your Windows account only, without an admin prompt. Python isn't needed.
+[*]On first start, the setup page finds the game through Steam or GOG and asks for Script Merger, the download folder and your Nexus API key.
+[/list]
+The manager checks for its own updates once a day (Help > Update Manager..., can be turned off). The installer's SHA-256 is in the README inside the zip and in the GitHub release notes.
+
+[b]Coming from the original Witcher 3 Mod Manager?[/b] FMTweak Form uses the same settings folder, so your mod list is picked up. Back up [i]AppData\Local\The Witcher 3 Mod Manager[/i] first, and don't run both at the same time.
+
+[size=4][b]Nexus account[/b][/size]
+The Nexus features need your personal Nexus API key, from the bottom of the [url=https://next.nexusmods.com/settings/api-keys]API keys page[/url], entered under Settings > Setup... The key is stored encrypted with Windows and is only ever sent to Nexus.
+[list]
+[*][b]Premium:[/b] one-click updates and downloads straight from the manager.
+[*][b]Free:[/b] update checks, changelogs and everything else work the same. Downloads open the Nexus page; click "Mod Manager Download" there and the manager installs the file (turn on the nxm link handler first).
+[/list]
+
+[size=4][b]Antivirus warnings[/b][/size]
+The manager is a Python program packed with cx_Freeze, which some antivirus programs flag by mistake. The full source is on GitHub, and every release lists the installer's SHA-256 so you can check your download.
+
+[size=4][b]Not supported[/b][/size]
+[list]
+[*]Script Merger merging itself (the manager runs Script Merger; it doesn't replace it)
+[*]Merging individual ini keys (ini files in bin/config/base are copied whole)
+[*]The new features haven't been tried on Linux or macOS
+[/list]
+
+[size=4][b]Credits and licence[/b][/size]
+Original manager by [b]stefan3372[/b], continued by [b]Systemcluster[/b] ([url=https://github.com/Systemcluster/The-Witcher-3-Mod-manager]GitHub[/url]). FMTweak Form is not made or supported by them, so please report problems here or on [url=https://github.com/mooonski/W3MM-casualfork/issues]this fork's GitHub issues[/url], not upstream.
+Released under the BSD 2-Clause licence. Source: [url=https://github.com/mooonski/W3MM-casualfork]github.com/mooonski/W3MM-casualfork[/url]

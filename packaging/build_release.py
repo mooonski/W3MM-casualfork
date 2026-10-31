@@ -5,9 +5,13 @@ cx_Freeze copies the whole PySide6 package, about 340 MB, most of it Qt modules 
 Compiled modules record where their source was on the build machine (a path with the Windows account name,
 shown in tracebacks), so the copy's .pyc files are rewritten with generic paths and the build fails if any remain.
 
-Run with the project's Python from the repository root: python packaging/build_release.py
-Needs Inno Setup 6 for the installer (ISCC.exe); without it, only the trimmed folder is made.'''
+The installer is also packed into a zip for Nexus Mods, with the licence and a readme naming the installer's SHA-256.
 
+Run with the project's Python from the repository root: python packaging/build_release.py
+Needs Inno Setup 6 for the installer (ISCC.exe); without it, only the trimmed folder is made.
+With --nexus, only the Nexus zip is made, from the installer already in dist/.'''
+
+import hashlib
 import marshal
 import os
 import re
@@ -172,8 +176,49 @@ def remainingPaths(folder: str, needle: str) -> list[str]:
     return found
 
 
+NEXUS_README = '''FMTweak Form {version} - mod manager for The Witcher 3
+An unofficial fork of The Witcher 3 Mod Manager by stefan3372 and Systemcluster.
+
+Install: run {installer}. It installs for your Windows account only, without an admin prompt.
+Python isn't needed. Uninstall it from Windows Settings > Apps; your settings, mod list and backups are kept.
+
+SHA-256 of the installer: {sha256}
+
+Source code, releases and issues: https://github.com/mooonski/W3MM-casualfork
+Licence: BSD 2-Clause, see LICENSE.txt
+'''
+
+
+def sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, 'rb') as file:
+        for block in iter(lambda: file.read(2**20), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def nexusZip(version: str, dist: str = DIST) -> str:
+    '''Packs dist's installer for the version into a zip for Nexus Mods, with the licence and a readme.
+    Returns the zip's path.'''
+    installer = os.path.join(dist, f'W3MM-casualfork-{version}-setup.exe')
+    target = os.path.join(dist, f'W3MM-casualfork-{version}-nexus.zip')
+    if not os.path.isfile(installer):
+        raise SystemExit(f'{installer} not found')
+    if os.path.exists(target):
+        raise SystemExit(f'{target} already exists. Move or remove it first.')
+    readme = NEXUS_README.format(version=version, installer=os.path.basename(installer), sha256=sha256(installer))
+    with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as package:
+        package.write(installer, os.path.basename(installer))
+        package.write(os.path.join(ROOT, 'LICENSE'), 'LICENSE.txt')
+        package.writestr('README.txt', readme.replace('\n', '\r\n'))
+    return target
+
+
 def main() -> None:
     version = forkVersion()
+    if '--nexus' in sys.argv[1:]:
+        print(f'made {nexusZip(version)}')
+        return
     build = os.path.join(ROOT, 'build', f'W3MM-casualfork-{version}')
     folder = os.path.join(DIST, f'W3MM-casualfork-{version}')
     # cx_Freeze builds over an existing folder, so files from an older build could end up in the release
@@ -197,6 +242,7 @@ def main() -> None:
     subprocess.run(
         [iscc, f'/DAppVersion={version}', f'/DSourceDir={folder}', f'/DOutputDir={DIST}', SCRIPT], cwd=ROOT, check=True
     )
+    print(f'made {nexusZip(version)}')
 
 
 if __name__ == '__main__':
